@@ -826,30 +826,51 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 	return nil
 }
 
+// transientRetries is how many extra attempts an episode gets when it fails for
+// a reason other than rate limiting: a connection reset or a dropped route ends
+// an episode without necessarily meaning anything is wrong with it.
+const transientRetries = 3
+
+// transientWait is the first retry delay for such a failure, doubled on each
+// attempt: 15s, 30s, 1m.
+const transientWait = 15 * time.Second
+
 // downloadEpisodeWithRetry runs downloadEpisode, retrying the same episode
 // with a growing delay whenever Crunchyroll rate-limits the account, instead
 // of moving on to the next episode and immediately tripping the same rate
-// limit again.
-func downloadEpisodeWithRetry(baseContentId string, info EpisodeInfo, audioLangs, subsLangs, ccLangs []string, videoQuality, audioQuality *string, baseDirectory string) {
+// limit again, and a few times over a transient network failure.
+func downloadEpisodeWithRetry(baseContentId string, info EpisodeInfo, audioLangs, subsLangs, ccLangs []string, videoQuality, audioQuality *string, baseDirectory string) (err error) {
+	transientAttempts := 0
 	for {
 		err := downloadEpisode(baseContentId, info, audioLangs, subsLangs, ccLangs, videoQuality, audioQuality, baseDirectory)
 		if err == nil {
 			backoff.resetRateLimit()
-			return
-		}
-		if !errors.Is(err, ErrRateLimited) {
-			return
+			return nil
 		}
 
-		wait := backoff.rateLimitWait()
-		retryAt := time.Now().Add(wait)
-		fmt.Printf("Retrying this episode in %s [%s]...\n", wait.Round(time.Second), retryAt.Local().Format(time.Kitchen))
+		if errors.Is(err, ErrRateLimited) {
+			wait := backoff.rateLimitWait()
+			retryAt := time.Now().Add(wait)
+			fmt.Printf("Retrying this episode in %s [%s]...\n", wait.Round(time.Second), retryAt.Local().Format(time.Kitchen))
+			time.Sleep(wait)
+			continue
+		}
+
+		if transientAttempts >= transientRetries {
+			return err
+		}
+		wait := transientWait << transientAttempts
+		transientAttempts++
+		fmt.Printf("Download of %v failed (%v), retrying in %s [attempt %v/%v]...\n",
+			episodeMarker(info), err, wait, transientAttempts, transientRetries)
 		time.Sleep(wait)
 	}
 }
 
 func downloadSeason(videoQuality, audioQuality *string, audioLangs, subsLangs, ccLangs []string, episodes []SeasonEpisode, baseDirectory string) {
 	fmt.Printf("Downloading season %v of %s (%v episodes)\n\n", episodes[0].SeasonNumber, episodes[0].SeriesTitle, len(episodes))
+
+	var failed []string
 
 	for _, episode := range episodes {
 		info := EpisodeInfo{
@@ -867,6 +888,18 @@ func downloadSeason(videoQuality, audioQuality *string, audioLangs, subsLangs, c
 		// Cached, so this is one request for the whole season.
 		info.SeriesLaunchYear = getSeriesInfo(episode.SeriesID).LaunchYear
 
-		downloadEpisodeWithRetry(episode.ID, info, audioLangs, subsLangs, ccLangs, videoQuality, audioQuality, baseDirectory)
+		if err := downloadEpisodeWithRetry(episode.ID, info, audioLangs, subsLangs, ccLangs, videoQuality, audioQuality, baseDirectory); err != nil {
+			failed = append(failed, fmt.Sprintf("%v (%v) - %v", episodeMarker(info), info.Title, err))
+		}
+	}
+
+	// Say it plainly at the end of the season: an episode lost to a dropped
+	// connection otherwise just isn't there, and nothing points at it.
+	if len(failed) > 0 {
+		fmt.Printf("\n%v episode(s) of %v could not be downloaded:\n", len(failed), episodes[0].SeriesTitle)
+		for _, line := range failed {
+			fmt.Printf("  %v\n", line)
+		}
+		fmt.Printf("Running the same command again retries just these.\n\n")
 	}
 }

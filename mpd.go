@@ -70,7 +70,15 @@ func getBaseUrl(set *mpd.AdaptationSet, isVideoSet bool, quality string) (*strin
 		return nil, nil
 	}
 	firstRep := set.Representations[0]
-	fmt.Printf("Audio quality %s not found, deferring to %s\n", quality, *firstRep.ID)
+	// Both branches above fall through to here, so the kind has to be derived
+	// from the caller instead of assumed to be audio.
+	if isVideoSet {
+		// The representation ID of a video track doesn't say its height, so report
+		// the height itself: "deferring to 720p" is what the caller needs to know.
+		fmt.Printf("Video quality %s not found, deferring to %dp\n", quality, *firstRep.Height)
+	} else {
+		fmt.Printf("Audio quality %s not found, deferring to %s\n", quality, *firstRep.ID)
+	}
 	return &firstRep.BaseURL[0].Value, firstRep.ID
 }
 

@@ -21,13 +21,20 @@ type downloadBackoff struct {
 	rateLimitHits int
 }
 
-// defaultRateLimitWait is the starting retry delay for a rate-limited episode
-// when no -download-delay is configured.
-const defaultRateLimitWait = time.Minute
+// defaultRateLimitWait is the starting retry delay for a rate-limited episode.
+//
+// A minute looked polite but isn't: Crunchyroll's limit is per client, not per
+// account (a fresh cookie on the same machine stays blocked), and the window is
+// long enough that retrying every minute only spends attempts against it. Five
+// minutes is short enough to recover within the same run once the window opens
+// and long enough not to keep poking it, and each further hit doubles from here.
+const defaultRateLimitWait = 5 * time.Minute
 
 // maxRateLimitWait caps rateLimitWait's exponential growth so a long streak of
-// consecutive rate-limit hits doesn't produce absurd delays.
-const maxRateLimitWait = 30 * time.Minute
+// consecutive rate-limit hits doesn't produce absurd delays. Two hours, because
+// the observed block outlives 30 minutes; the sequence 5m, 10m, 20m, 40m, 1h20m,
+// 2h covers a few hours of blocking without exceeding it.
+const maxRateLimitWait = 2 * time.Hour
 
 func newDownloadBackoff(delay time.Duration) *downloadBackoff {
 	return &downloadBackoff{delay: delay, now: time.Now, sleep: time.Sleep}
