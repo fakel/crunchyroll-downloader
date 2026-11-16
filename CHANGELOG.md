@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Dependencies updated (mp4ff 0.63, go-mpd) and `go.mod` now requires Go 1.26
+- Dependencies updated (mp4ff 0.63, sftp 1.13.12, x/crypto 0.59, go-mpd) and `go.mod` now requires Go 1.26
 - PSSH extraction now parses the manifest directly instead of relying on `go-mpd`'s `Descriptor`. Upstream changed the struct tag from `pssh` to `cenc:pssh`, which `encoding/xml` reads as a literal element name and so never matches a namespaced `<cenc:pssh>`; upgrading the module silently made every download fail with "PSSH not found". A test now covers both the prefixed and unprefixed element
 - An invalid episode URL now fails with `episode X not found (HTTP 404); check the URL` instead of crashing with `panic: runtime error: index out of range [0] with length 0`
 - Episodes are now laid out as `<Series> (<Year>)/Season NN/<Series> (<Year>) SxxExx - <Title>.mkv` so Jellyfin and other media servers match them against their own databases without manual renaming

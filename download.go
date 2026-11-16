@@ -856,18 +856,21 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 }
 
 // transientRetries is how many extra attempts an episode gets when it fails for
-// a reason other than rate limiting: a connection reset or a dropped route ends
-// an episode without necessarily meaning anything is wrong with it.
+// a reason other than rate limiting (a connection reset, a dropped route, a
+// timeout). Losing a single request to one of those used to abandon the episode
+// and move on, leaving a hole in the season that nothing reported.
 const transientRetries = 3
 
 // transientWait is the first retry delay for such a failure, doubled on each
-// attempt: 15s, 30s, 1m.
+// further attempt. Short, because a dropped connection is fixed by trying again
+// rather than by waiting: 15s, 30s, 1m.
 const transientWait = 15 * time.Second
 
 // downloadEpisodeWithRetry runs downloadEpisode, retrying the same episode
 // with a growing delay whenever Crunchyroll rate-limits the account, instead
 // of moving on to the next episode and immediately tripping the same rate
-// limit again, and a few times over a transient network failure.
+// limit again. Other failures get a few quick retries too, and are then
+// reported as failed rather than skipped silently.
 func downloadEpisodeWithRetry(baseContentId string, info EpisodeInfo, audioLangs, subsLangs, ccLangs []string, videoQuality, audioQuality *string, baseDirectory string) (err error) {
 	transientAttempts := 0
 	for {
