@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,17 @@ const (
 	// download does not accumulate an unbounded number of samples.
 	sampleInterval = 200 * time.Millisecond
 )
+
+// plainProgress switches the progress display from an in-place animated bar to
+// one boring line per update, set with CRDL_PROGRESS=plain. It exists for runs
+// whose output isn't a terminal: when the program is started by the web
+// interface its output is a log file, where cursor moves are noise and each bar
+// redraw would otherwise repeat the same line dozens of times per second.
+var plainProgress = strings.EqualFold(strings.TrimSpace(os.Getenv("CRDL_PROGRESS")), "plain")
+
+// plainInterval is the minimum spacing between two plain progress lines for the
+// same bar, so a fast download doesn't write thousands of lines.
+const plainInterval = 2 * time.Second
 
 // progressRenderer draws a set of progress bars, one per line, and rewrites them
 // in place as they advance. It exists so parallel video/audio downloads can both
@@ -46,6 +58,11 @@ type progressBar struct {
 	total   int64
 	current int64
 	samples []byteSample // recent (time, bytes) observations for the rate
+
+	// plain-mode bookkeeping: the last line written and when, so updates can
+	// be throttled without touching the terminal.
+	lastPlain time.Time
+	lastPct   int64
 }
 
 // newProgressBar registers a bar for a download. Callers that do not know the
@@ -55,6 +72,9 @@ func newProgressBar(title string, total int64, label string) *progressBar {
 	defer progressRenderer.mu.Unlock()
 	b := &progressBar{title: title, total: total, label: label}
 	progressRenderer.bars = append(progressRenderer.bars, b)
+	if plainProgress {
+		return b
+	}
 	renderLocked()
 	return b
 }
@@ -87,7 +107,41 @@ func (b *progressBar) update(current, bytes int64) {
 	}
 	b.current = current
 	b.recordBytes(bytes)
+	if plainProgress {
+		b.renderPlainLocked()
+		return
+	}
 	renderLocked()
+}
+
+// renderPlainLocked writes one line for this bar, at most every plainInterval
+// unless the percentage moved into a new value. Must be called with
+// progressRenderer.mu held.
+func (b *progressBar) renderPlainLocked() {
+	percent := b.percent()
+	if percent == b.lastPct && time.Since(b.lastPlain) < plainInterval {
+		return
+	}
+	b.lastPct = percent
+	b.lastPlain = time.Now()
+
+	line := fmt.Sprintf("progress: %v %d%%", b.title, percent)
+	if rate := b.rateMbps(); rate > 0 {
+		line += fmt.Sprintf(" %.1f Mbps", rate)
+	}
+	fmt.Println(line)
+}
+
+// percent is current/total as a whole percentage, 0 when the total isn't known.
+func (b *progressBar) percent() int64 {
+	if b.total <= 0 {
+		return 0
+	}
+	current := b.current
+	if current > b.total {
+		current = b.total
+	}
+	return current * 100 / b.total
 }
 
 // finish removes the bar from the display, leaving the remaining bars redrawn.
@@ -99,6 +153,13 @@ func (b *progressBar) finish() {
 			progressRenderer.bars = append(progressRenderer.bars[:i], progressRenderer.bars[i+1:]...)
 			break
 		}
+	}
+	if plainProgress {
+		// One closing line so a log shows where each track ended, even if the
+		// last update was skipped by the throttle.
+		line := fmt.Sprintf("progress: %v %d%% done", b.title, b.percent())
+		fmt.Println(line)
+		return
 	}
 	renderLocked()
 }

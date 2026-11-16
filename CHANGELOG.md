@@ -18,6 +18,8 @@
 - Added `CRDL_SFTP_KNOWN_HOSTS` to verify the SFTP server's host key; without it the key is accepted as-is (LAN default). A mismatch or unknown host is reported with the exact `ssh-keygen -R` / `ssh-keyscan` command to fix it
 - A season Crunchyroll lists that isn't a season of the series now goes where media servers look for it: a special ("Dr. STONE Special Episode - RYUSUI") goes to `Specials/` as season 0, and an Extras or bonus season goes to `Extras/`, instead of both landing in numbered season folders of the series and showing up in Jellyfin as episodes it doesn't have
 - Added `--renumber-seasons` for shows where a special or an extras season sits among the real seasons in Crunchyroll's listing: the regular seasons are numbered 1..n so the folders are contiguous and match TMDB/TheTVDB (Dr. STONE goes from `Season 01, 02, 04, 05` to `Season 01..04`). Specials and extras aren't counted, so they never cause a gap
+- `--etp-rt` can be supplied through `CRDL_ETP_RT` instead of the command line, so the cookie doesn't sit in shell history or in a scheduled command
+- Added `CRDL_PROGRESS=plain`, which turns the animated progress bars into one plain line per update (`progress: video 62% 22.0 Mbps`), for logs and for anything that isn't a terminal
 
 ## 1.6.0
 

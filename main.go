@@ -18,7 +18,7 @@ var (
 	videoQuality    = flag.String("video-quality", "1080p", "Video quality")
 	audioQuality    = flag.String("audio-quality", "192k", "Audio quality")
 	seasonNumber    = flag.Int("season", 0, "Season number. Not used if an episode link is entered")
-	etpRt           = flag.String("etp-rt", "", "The \"etp_rt\" cookie value of your account")
+	etpRt           = flag.String("etp-rt", "", "The \"etp_rt\" cookie value of your account (or set CRDL_ETP_RT)")
 	debug           = flag.Bool("debug-manifest", false, "Log raw episode playback JSON and manifest XML")
 	downloadDelay   = flag.Duration("download-delay", 40*time.Second, "Minimum delay between episode downloads, to help avoid Crunchyroll's rate limiting. Defaults to 40s; pass 0 to download back to back")
 	output          = flag.String("output-dir", ".", "Target base path for downloading")
@@ -133,6 +133,14 @@ func main() {
 	url := flag.String("url", "", "URL of the episode/season to download")
 	urlsFile := flag.String("file", "", "Path to a text file with one URL per line")
 	flag.Parse()
+
+	// The cookie is long-lived, so it can come from the environment instead of
+	// being pasted into every command line.
+	if *etpRt == "" {
+		if cookie := os.Getenv("CRDL_ETP_RT"); cookie != "" {
+			*etpRt = cookie
+		}
+	}
 
 	if *url == "" && *urlsFile == "" {
 		flag.Usage()
