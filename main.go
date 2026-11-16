@@ -30,6 +30,10 @@ var (
 // left nil) whenever no delay is configured.
 var backoff *downloadBackoff
 
+// remote is the optional SFTP destination built from the environment in main().
+// It is nil unless CRDL_SFTP_HOST is set, which makes remote.push a no-op.
+var remote *remoteUploader
+
 // parseLangs splits a comma-separated locale list, trimming spaces and dropping
 // empties.
 func parseLangs(s string) []string {
@@ -165,6 +169,24 @@ func main() {
 		os.Exit(1)
 	}
 	backoff = newDownloadBackoff(*downloadDelay)
+
+	// Opt-in: only an explicitly configured CRDL_SFTP_HOST enables uploading.
+	remote = remoteFromEnv()
+	if remote != nil {
+		if err := remote.check(); err != nil {
+			fmt.Printf("Invalid SFTP configuration: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Uploading each episode to %s\n", remote.describe())
+		if remote.knownHosts != "" {
+			fmt.Printf("Verifying the server key against %s\n", remote.knownHosts)
+		} else {
+			fmt.Printf("Warning: %s is not set, the server's host key is not verified.\n", envSFTPKnownHosts)
+		}
+		if !remote.keepLocal {
+			fmt.Println("Local files are removed after a successful upload.")
+		}
+	}
 
 	if *urlsFile != "" {
 		file, err := os.Open(*urlsFile)

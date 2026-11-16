@@ -552,6 +552,16 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 		return
 	}
 
+	// With a remote destination configured the local file was deleted after the
+	// previous run, so a re-run would download the episode again. Ask the server
+	// instead.
+	if remote != nil {
+		if name, ok := remote.findEpisode(seasonDir, baseDirectory, marker); ok {
+			fmt.Printf("Episode %v is already on the server as \"%s\", skipping...\n", info.EpisodeMetadata.EpisodeNumber, name)
+			return
+		}
+	}
+
 	// Created only once an episode is really going to be downloaded: doing it
 	// before the skips above leaves an empty season folder behind after every
 	// run that found nothing to do.
@@ -823,6 +833,9 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 	}
 
 	mergeEverything(videoFile, audioTracks, subTracks, outputFile, info)
+	// Upload right away so the next episode has the disk space back; the whole
+	// season never has to fit locally.
+	remote.push(outputFile, baseDirectory)
 	return nil
 }
 
