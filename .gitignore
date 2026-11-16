@@ -11,3 +11,7 @@ private_key.pem
 # Compiled binaries
 /crunchyroll-downloader
 *.exe
+
+# local secrets
+.env
+/cdms/
