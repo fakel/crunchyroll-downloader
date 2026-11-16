@@ -25,10 +25,22 @@ func trackTitle(locale string) string {
 }
 
 // inputArgs lists one downloaded audio or video file preceded by the flags it
-// needs. Subtitle files are passed straight to FFmpeg by mergeEverything: a
-// demuxer option for MP4 would make FFmpeg reject the whole command for them.
+// needs.
+//
+// Every downloaded track is its own MP4 with its own edit list, and FFmpeg
+// aligns several inputs by their declared start time. The edit list Crunchyroll
+// ships on the audio tracks makes FFmpeg report a start time of ~8.85s for the
+// audio (the same value for every episode, however long) while the video reports
+// 0, so FFmpeg "aligns" them by pushing the picture forward those 8.85 seconds
+// and the whole episode plays with the audio almost nine seconds ahead of the
+// image. Ignoring the edit lists makes each input report the timestamp of its own
+// first packet, which is the alignment that leaves at most one frame of residual
+// offset (the codec priming samples).
+//
+// -ignore_editlist is a mov/mp4 demuxer option, so subtitle files must not get it: FFmpeg
+// rejects the whole command with "Option ignore_editlist not found" for them.
 func inputArgs(file string) []string {
-	return []string{"-i", file}
+	return []string{"-ignore_editlist", "1", "-i", file}
 }
 
 // mergeEverything merges the video, all audio tracks and all subtitle tracks
