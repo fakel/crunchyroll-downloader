@@ -133,13 +133,18 @@ func mergeEverything(videoFile string, audioTracks, subTracks []mediaTrack, outp
 		panic(fmt.Sprintf("ffmpeg failed: %s\n%s", err, stderr.String()))
 	}
 
-	// Remove temporary files
-	_ = os.Remove(videoFile)
-	for _, audio := range audioTracks {
-		_ = os.Remove(audio.file)
-	}
-	for _, sub := range subTracks {
-		_ = os.Remove(sub.file)
+	// Remove temporary files. CRDL_KEEP_TEMP leaves them in place: an A/V sync
+	// problem can only be traced back to the downloaded tracks if they survive.
+	if os.Getenv("CRDL_KEEP_TEMP") == "" {
+		_ = os.Remove(videoFile)
+		for _, audio := range audioTracks {
+			_ = os.Remove(audio.file)
+		}
+		for _, sub := range subTracks {
+			_ = os.Remove(sub.file)
+		}
+	} else {
+		fmt.Printf("Kept temporary files (CRDL_KEEP_TEMP): %s\n", videoFile)
 	}
 
 	fmt.Printf("\nDownload finished! Output file: %s\n\n", outputFile)

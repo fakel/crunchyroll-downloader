@@ -10,6 +10,7 @@
 - Added `--absolute-numbering` for shows Crunchyroll splits into artificial seasons (One Piece, Detective Conan): episodes go to `Season 01` with their absolute episode number, matching how TMDB/TheTVDB index them
 - An episode is now skipped when the same `SxxExx` already exists locally, instead of requiring an exact file name match. Changing `--subs-lang` renames the file (the title is served in that language), which used to download the whole episode again and leave a duplicate behind
 - Fixed the audio running several seconds ahead of the picture in every downloaded episode. Crunchyroll's audio track declares its edit list media time in the manifest's 10^7 timescale while the track itself is 48 kHz, so the value `426667` means 0.04s to a correct reader but 8.889s to FFmpeg. Because every track is merged as a separate input, FFmpeg aligned them by those start times and pushed the picture 8.889s forward. The merge now passes `-ignore_editlist 1` for every input, which leaves one frame of residual offset from the codec priming samples instead of nine seconds (`inputArgs` in `output.go`, `output_merge_test.go`)
+- Added `CRDL_KEEP_TEMP` to keep the downloaded per-track temporary files after a merge, so a sync or quality problem can be traced back to the tracks it came from
 
 ## 1.6.0
 
