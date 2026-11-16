@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Dependencies updated (mp4ff 0.63, go-mpd) and `go.mod` now requires Go 1.26
+
 ## 1.6.0
 
 - Added `--download-delay` to wait a minimum time between episode downloads, which helps avoid Crunchyroll's rate limiting on season and batch downloads ([#42](https://github.com/CuteTenshii/crunchyroll-downloader/issues/42), [#57](https://github.com/CuteTenshii/crunchyroll-downloader/issues/57))
