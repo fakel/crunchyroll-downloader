@@ -470,25 +470,93 @@ func availableSubtitleLangs(tracks map[string]*Subtitle) []string {
 	return available
 }
 
-func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLangs, ccLangs []string, videoQuality, audioQuality *string, baseDirectory string) (err error) {
-	cleanSeriesTitle := sanitizeFilename(info.EpisodeMetadata.SeriesTitle)
-	cleanEpisodeTitle := sanitizeFilename(info.Title)
+// seasonEpisodeNumbers returns the season and episode numbers used both in the
+// output path and in the container metadata, so the two never disagree.
+//
+// With -absolute-numbering every episode lands in Season 01 and keeps its
+// episode number, which is how media servers index long-running shows that
+// Crunchyroll splits into artificial seasons: One Piece's "Season 4" (Alabasta)
+// is E62-143 of a single season everywhere else.
+func seasonEpisodeNumbers(info EpisodeInfo) (season, episode int) {
+	// -absolute-numbering puts every episode in Season 01 and keeps its own
+	// number, which is how media servers index long-running shows that
+	// Crunchyroll splits into artificial seasons.
+	if absoluteNum != nil && *absoluteNum {
+		return 1, info.EpisodeMetadata.EpisodeNumber
+	}
+	return info.EpisodeMetadata.SeasonNumber, info.EpisodeMetadata.EpisodeNumber
+}
 
-	if _, err := os.Stat(filepath.Join(baseDirectory, cleanSeriesTitle)); err != nil {
-		_ = os.MkdirAll(filepath.Join(baseDirectory, cleanSeriesTitle), 0777)
+// jellyfinEpisodePath lays an episode out the way Jellyfin matches best:
+//
+//	<base>/<Series> (<Year>)/Season NN/<Series> (<Year>) SxxExx - <Title>.mkv
+//
+// The year is what lets Jellyfin tell remakes and reboots sharing a title
+// apart, and the season folder keeps every season of a series together.
+func jellyfinEpisodePath(baseDirectory string, info EpisodeInfo, videoQuality string) string {
+	seriesName := sanitizeFilename(info.EpisodeMetadata.SeriesTitle)
+	if info.SeriesLaunchYear > 0 {
+		seriesName = fmt.Sprintf("%s (%d)", seriesName, info.SeriesLaunchYear)
+	}
+	season, episode := seasonEpisodeNumbers(info)
+	return filepath.Join(
+		baseDirectory,
+		seriesName,
+		seasonFolder(season),
+		fmt.Sprintf("%s S%02dE%02d - %s [%s].mkv", seriesName, season, episode, sanitizeFilename(info.Title), videoQuality),
+	)
+}
+
+// seasonFolder is the directory name holding a season's episodes.
+func seasonFolder(season int) string {
+	return fmt.Sprintf("Season %02d", season)
+}
+
+// episodeMarker is the part of a file name that identifies an episode no matter
+// whose title or quality tag it was written with: "S01E05 - ". Matching on it
+// keeps a re-run from downloading an episode twice when the title language or
+// the requested quality changed.
+func episodeMarker(info EpisodeInfo) string {
+	season, episode := seasonEpisodeNumbers(info)
+	return fmt.Sprintf("S%02dE%02d - ", season, episode)
+}
+
+// findEpisodeInDir reports the name of an existing file in dir that matches
+// marker, so an episode already on disk is skipped even if its file name differs.
+func findEpisodeInDir(dir, marker string) (string, bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if strings.Contains(entry.Name(), marker) {
+			return entry.Name(), true
+		}
+	}
+	return "", false
+}
+
+func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLangs, ccLangs []string, videoQuality, audioQuality *string, baseDirectory string) (err error) {
+	outputFile := jellyfinEpisodePath(baseDirectory, info, *videoQuality)
+
+	// The episode number is the identity here, not the file name: changing
+	// --subs-lang renames the file (a Spanish run titles it differently from an
+	// English one), and re-downloading a whole episode for a rename would put two
+	// copies of it on the server.
+	seasonDir, marker := filepath.Dir(outputFile), episodeMarker(info)
+	if name, ok := findEpisodeInDir(seasonDir, marker); ok {
+		fmt.Printf("Episode %v is already downloaded as \"%s\", skipping...\n", info.EpisodeMetadata.EpisodeNumber, name)
+		return
 	}
 
-	outputFile := filepath.Join(baseDirectory, cleanSeriesTitle, fmt.Sprintf("%s S%02dE%02d - %s [%s].mkv",
-		cleanSeriesTitle,
-		info.EpisodeMetadata.SeasonNumber,
-		info.EpisodeMetadata.EpisodeNumber,
-		cleanEpisodeTitle,
-		*videoQuality,
-	))
-
-	if _, statErr := os.Stat(outputFile); statErr == nil {
-		fmt.Printf("Episode %v is already downloaded, skipping...\n", info.EpisodeMetadata.EpisodeNumber)
-		return
+	// Created only once an episode is really going to be downloaded: doing it
+	// before the skips above leaves an empty season folder behind after every
+	// run that found nothing to do.
+	if _, err := os.Stat(seasonDir); err != nil {
+		_ = os.MkdirAll(seasonDir, 0777)
 	}
 
 	// Resolve each requested audio locale to its version GUID. Each dub is a
@@ -521,7 +589,8 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 		return
 	}
 
-	fmt.Printf("Downloading: %s (S%02vE%02v) from %s\n", info.Title, info.EpisodeMetadata.SeasonNumber, info.EpisodeMetadata.EpisodeNumber, info.EpisodeMetadata.SeriesTitle)
+	season, episodeNumber := seasonEpisodeNumbers(info)
+	fmt.Printf("Downloading: %s (S%02vE%02v) from %s\n", info.Title, season, episodeNumber, info.EpisodeMetadata.SeriesTitle)
 
 	// Space this download out from the previous one, if a delay is configured.
 	// Applied here rather than around the whole function so that episodes
@@ -676,7 +745,6 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 				fail(fmt.Errorf("parsing manifest for %s: %w", version.locale, err))
 				return
 			}
-			// The raw manifest: getPssh matches the tag whichever namespace it's in.
 			pssh := getPssh(body)
 			if pssh == nil {
 				fail(fmt.Errorf("PSSH not found for %s", version.locale))
@@ -787,6 +855,7 @@ func downloadSeason(videoQuality, audioQuality *string, audioLangs, subsLangs, c
 		info := EpisodeInfo{
 			EpisodeMetadata: EpisodeMetadata{
 				SeriesTitle:        episode.SeriesTitle,
+				SeriesID:           episode.SeriesID,
 				SeasonNumber:       episode.SeasonNumber,
 				EpisodeNumber:      episode.EpisodeNumber,
 				AudioLocale:        episode.AudioLocale,
@@ -795,6 +864,8 @@ func downloadSeason(videoQuality, audioQuality *string, audioLangs, subsLangs, c
 			},
 			Title: episode.Title,
 		}
+		// Cached, so this is one request for the whole season.
+		info.SeriesLaunchYear = getSeriesInfo(episode.SeriesID).LaunchYear
 
 		downloadEpisodeWithRetry(episode.ID, info, audioLangs, subsLangs, ccLangs, videoQuality, audioQuality, baseDirectory)
 	}

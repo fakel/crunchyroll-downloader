@@ -24,12 +24,19 @@ func trackTitle(locale string) string {
 	return locale
 }
 
+// inputArgs lists one downloaded audio or video file preceded by the flags it
+// needs. Subtitle files are passed straight to FFmpeg by mergeEverything: a
+// demuxer option for MP4 would make FFmpeg reject the whole command for them.
+func inputArgs(file string) []string {
+	return []string{"-i", file}
+}
+
 // mergeEverything merges the video, all audio tracks and all subtitle tracks
 // into a single MKV container.
 func mergeEverything(videoFile string, audioTracks, subTracks []mediaTrack, outputFile string, info EpisodeInfo) {
-	args := []string{"-i", videoFile}
+	args := inputArgs(videoFile)
 	for _, audio := range audioTracks {
-		args = append(args, "-i", audio.file)
+		args = append(args, inputArgs(audio.file)...)
 	}
 	for _, sub := range subTracks {
 		args = append(args, "-i", sub.file)
@@ -97,11 +104,12 @@ func mergeEverything(videoFile string, audioTracks, subTracks []mediaTrack, outp
 		args = append(args, fmt.Sprintf("-disposition:s:%d", j), disposition)
 	}
 
+	season, episodeNumber := seasonEpisodeNumbers(info)
 	args = append(args,
-		"-metadata:g", "title="+fmt.Sprintf("S%02vE%02v - %s", info.EpisodeMetadata.SeasonNumber, info.EpisodeMetadata.EpisodeNumber, info.Title),
+		"-metadata:g", "title="+fmt.Sprintf("S%02vE%02v - %s", season, episodeNumber, info.Title),
 		"-metadata:g", "show="+info.EpisodeMetadata.SeriesTitle,
-		"-metadata:g", "track="+fmt.Sprintf("%v", info.EpisodeMetadata.EpisodeNumber),
-		"-metadata:g", "season_number="+fmt.Sprintf("%v", info.EpisodeMetadata.SeasonNumber),
+		"-metadata:g", "track="+fmt.Sprintf("%v", episodeNumber),
+		"-metadata:g", "season_number="+fmt.Sprintf("%v", season),
 		outputFile,
 	)
 

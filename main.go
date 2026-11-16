@@ -11,19 +11,18 @@ import (
 )
 
 var (
-	token           = ""
-	audioLang       = flag.String("audio-lang", "ja-JP", "Audio language(s), comma-separated (e.g. \"ja-JP,en-US\"). Add ALL for every available dub; explicit languages lead, the first available track is default, and ALL alone prefers ja-JP")
-	subtitlesLang   = flag.String("subs-lang", "en-US", "Subtitle language(s), comma-separated (e.g. \"fr-FR,ALL\"). Add ALL for every available subtitle; explicit languages lead, the first available track is default, and ALL alone prefers en-US")
-	ccLang          = flag.String("cc-lang", "", "Closed caption language(s), comma-separated (e.g. \"en-US,ALL\"). Add ALL for every available caption; downloaded in addition to --subs-lang")
-	videoQuality    = flag.String("video-quality", "1080p", "Video quality")
-	audioQuality    = flag.String("audio-quality", "192k", "Audio quality")
-	seasonNumber    = flag.Int("season", 0, "Season number. Not used if an episode link is entered")
-	etpRt           = flag.String("etp-rt", "", "The \"etp_rt\" cookie value of your account (or set CRDL_ETP_RT)")
-	debug           = flag.Bool("debug-manifest", false, "Log raw episode playback JSON and manifest XML")
-	downloadDelay   = flag.Duration("download-delay", 40*time.Second, "Minimum delay between episode downloads, to help avoid Crunchyroll's rate limiting. Defaults to 40s; pass 0 to download back to back")
-	output          = flag.String("output-dir", ".", "Target base path for downloading")
-	renumberSeasons = flag.Bool("renumber-seasons", false, "Number the regular seasons 1..n, closing the gaps Crunchyroll leaves where it lists a special or extras among them (e.g. Dr. STONE: Season 04 becomes Season 03). Specials and extras are unaffected")
-	absoluteNum     = flag.Bool("absolute-numbering", false, "Put every episode in Season 01 and keep its absolute episode number, for long-running shows Crunchyroll splits into artificial seasons (e.g. One Piece: S04E62 becomes S01E62)")
+	token         = ""
+	audioLang     = flag.String("audio-lang", "ja-JP", "Audio language(s), comma-separated (e.g. \"ja-JP,en-US\"). Add ALL for every available dub; explicit languages lead, the first available track is default, and ALL alone prefers ja-JP")
+	subtitlesLang = flag.String("subs-lang", "en-US", "Subtitle language(s), comma-separated (e.g. \"fr-FR,ALL\"). Add ALL for every available subtitle; explicit languages lead, the first available track is default, and ALL alone prefers en-US")
+	ccLang        = flag.String("cc-lang", "", "Closed caption language(s), comma-separated (e.g. \"en-US,ALL\"). Add ALL for every available caption; downloaded in addition to --subs-lang")
+	videoQuality  = flag.String("video-quality", "1080p", "Video quality")
+	audioQuality  = flag.String("audio-quality", "192k", "Audio quality")
+	seasonNumber  = flag.Int("season", 0, "Season number. Not used if an episode link is entered")
+	etpRt         = flag.String("etp-rt", "", "The \"etp_rt\" cookie value of your account (or set CRDL_ETP_RT)")
+	debug         = flag.Bool("debug-manifest", false, "Log raw episode playback JSON and manifest XML")
+	downloadDelay = flag.Duration("download-delay", 40*time.Second, "Minimum delay between episode downloads, to help avoid Crunchyroll's rate limiting. Defaults to 40s; pass 0 to download back to back")
+	output        = flag.String("output-dir", ".", "Target base path for downloading")
+	absoluteNum   = flag.Bool("absolute-numbering", false, "Put every episode in Season 01 and keep its absolute episode number, for long-running shows Crunchyroll splits into artificial seasons (e.g. One Piece: S04E62 becomes S01E62)")
 )
 
 // backoff spaces out consecutive episode downloads by *downloadDelay. It is
@@ -93,6 +92,7 @@ func processUrl(url string) {
 			fmt.Printf("Couldn't read that episode: %s\n", err)
 			return
 		}
+		info.SeriesLaunchYear = getSeriesInfo(info.EpisodeMetadata.SeriesID).LaunchYear
 		downloadEpisodeWithRetry(contentId, info, audioLangs, subsLangs, ccLangs, videoQuality, audioQuality, *output)
 	} else {
 		seasons := getSeasons(contentId, primaryAudio, primarySubs)

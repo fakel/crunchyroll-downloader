@@ -17,6 +17,7 @@ type SeasonEpisode struct {
 	SeasonNumber       int           `json:"season_number"`
 	EpisodeNumber      int           `json:"episode_number"`
 	SeriesTitle        string        `json:"series_title"`
+	SeriesID           string        `json:"series_id"`
 	AudioLocale        string        `json:"audio_locale"`
 	Title              string        `json:"title"`
 	AvailabilityStarts string        `json:"availability_starts"`
@@ -61,6 +62,7 @@ type Seasons struct {
 type Season struct {
 	ID           string `json:"id"`
 	SeasonNumber int    `json:"season_number"`
+	Title        string `json:"title"`
 }
 
 func getSeasons(contentId string, audioLocale string, subLocale string) []Season {
