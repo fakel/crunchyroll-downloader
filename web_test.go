@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -661,7 +662,7 @@ func TestStaleLogIsPruned(t *testing.T) {
 func TestSeriesListOneEntryPerSeries(t *testing.T) {
 	store := testStore(t, stubBinary(t, 0, "Downloading season 1 of X (1 episodes)"))
 
-	entry, err := store.addToWishlist("https://www.crunchyroll.com/series/GYVNXMVP6/cowboy-bebop", "Cowboy Bebop", 0)
+	entry, err := store.addToWishlist("https://www.crunchyroll.com/series/GYVNXMVP6/cowboy-bebop", "Cowboy Bebop", 0, 0)
 	if err != nil {
 		t.Fatalf("addToWishlist: %v", err)
 	}
@@ -718,7 +719,7 @@ func TestSeriesListOneEntryPerSeries(t *testing.T) {
 func TestQueueIsIdempotent(t *testing.T) {
 	store := testStore(t, stubBinary(t, 0))
 
-	entry, err := store.addToWishlist("https://www.crunchyroll.com/series/GYVNXMVP6/cowboy-bebop", "", 0)
+	entry, err := store.addToWishlist("https://www.crunchyroll.com/series/GYVNXMVP6/cowboy-bebop", "", 0, 0)
 	if err != nil {
 		t.Fatalf("addToWishlist: %v", err)
 	}
@@ -747,7 +748,7 @@ func TestQueueIsIdempotent(t *testing.T) {
 func TestLearnedTitleReachesTheWishlist(t *testing.T) {
 	store := testStore(t, stubBinary(t, 0))
 
-	entry, err := store.addToWishlist("https://www.crunchyroll.com/series/GYVNXMVP6/cowboy-bebop", "", 0)
+	entry, err := store.addToWishlist("https://www.crunchyroll.com/series/GYVNXMVP6/cowboy-bebop", "", 0, 0)
 	if err != nil {
 		t.Fatalf("addToWishlist: %v", err)
 	}
@@ -823,5 +824,206 @@ func TestTitleFromURL(t *testing.T) {
 		if got := titleFromURL(url); got != want {
 			t.Errorf("titleFromURL(%q) = %q, want %q", url, got, want)
 		}
+	}
+}
+
+// TestPriorityOrder is the whole point of the feature: the queue starts the
+// series with the highest priority, whatever order they were added in.
+func TestPriorityOrder(t *testing.T) {
+	store := testStore(t, stubBinary(t, 0))
+
+	low, err := store.enqueue("https://www.crunchyroll.com/series/A/low", "", jobOptions{Priority: 0}, "")
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if _, err := store.enqueue("https://www.crunchyroll.com/series/B/medium", "", jobOptions{Priority: 2}, ""); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	high, err := store.enqueue("https://www.crunchyroll.com/series/C/high", "", jobOptions{Priority: 3}, "")
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if next := store.nextQueuedLocked(); next == nil || next.ID != high.ID {
+		t.Fatalf("next job = %v, want the priority 3 one", next)
+	}
+	// Dropping the front of the queue must not resurrect the oldest job: the
+	// priority 2 series goes next, and the oldest is last.
+	store.findLocked(high.ID).Status = statusRunning
+	if next := store.nextQueuedLocked(); next == nil || next.Options.Priority != 2 {
+		t.Errorf("second job = %v, want the priority 2 one", next)
+	}
+	store.findLocked(store.nextQueuedLocked().ID).Status = statusRunning
+	if next := store.nextQueuedLocked(); next == nil || next.ID != low.ID {
+		t.Errorf("third job = %v, want the oldest one", next)
+	}
+}
+
+// TestEqualPriorityKeepsTheQueueOrder locks in the promise in nextQueuedLocked's
+// comment: with no priority set, the queue is still first in, first out.
+func TestEqualPriorityKeepsTheQueueOrder(t *testing.T) {
+	store := testStore(t, stubBinary(t, 0))
+
+	first, err := store.enqueue("https://www.crunchyroll.com/series/A/one", "", jobOptions{}, "")
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if _, err := store.enqueue("https://www.crunchyroll.com/series/B/two", "", jobOptions{}, ""); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if next := store.nextQueuedLocked(); next == nil || next.ID != first.ID {
+		t.Errorf("next job = %v, want the first one queued", next)
+	}
+}
+
+// TestSetPriorityReordersTheQueue checks that promoting a series reorders the
+// job it already has waiting, so a priority read off the list is a priority the
+// queue obeys.
+func TestSetPriorityReordersTheQueue(t *testing.T) {
+	store := testStore(t, stubBinary(t, 0))
+
+	url := "https://www.crunchyroll.com/series/GYVNXMVP6/cowboy-bebop"
+	entry, err := store.addToWishlist(url, "Cowboy Bebop", 0, 0)
+	if err != nil {
+		t.Fatalf("addToWishlist: %v", err)
+	}
+	job, err := store.enqueue(entry.URL, entry.ID, jobOptions{}, entry.Title)
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if _, err := store.enqueue("https://www.crunchyroll.com/series/B/two", "", jobOptions{Priority: 2}, ""); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	if err := store.setPriority(entry.ID, 3); err != nil {
+		t.Fatalf("setPriority: %v", err)
+	}
+	store.mu.Lock()
+	next := store.nextQueuedLocked()
+	store.mu.Unlock()
+	if next == nil || next.ID != job.ID {
+		t.Fatalf("next job = %v, want the promoted one", next)
+	}
+
+	// Out-of-range and unknown entries are refused rather than silently clamped.
+	if err := store.setPriority(entry.ID, 9); !errors.Is(err, ErrPriorityOutOfRange) {
+		t.Errorf("setPriority(9) = %v, want ErrPriorityOutOfRange", err)
+	}
+	if err := store.setPriority("nope", 1); !errors.Is(err, errNotFound) {
+		t.Errorf("setPriority(unknown) = %v, want errNotFound", err)
+	}
+}
+
+// TestReaddingASeriesKeepsItsPriority: the form sends priority 0 unless one was
+// picked, and re-adding a series must not throw away the order already set.
+func TestReaddingASeriesKeepsItsPriority(t *testing.T) {
+	store := testStore(t, stubBinary(t, 0))
+	url := "https://www.crunchyroll.com/series/GYVNXMVP6/cowboy-bebop"
+
+	if _, err := store.addToWishlist(url, "", 0, 3); err != nil {
+		t.Fatalf("addToWishlist: %v", err)
+	}
+	entry, err := store.addToWishlist(url, "", 1, 0)
+	if err != nil {
+		t.Fatalf("addToWishlist: %v", err)
+	}
+	if entry.Priority != 3 {
+		t.Errorf("priority = %d after re-adding, want 3", entry.Priority)
+	}
+	if entry.Season != 1 {
+		t.Errorf("season = %d, want the new one (1)", entry.Season)
+	}
+}
+
+// TestPrioritySurvivesARestart: the priority lives in the persisted state, so a
+// restart while a series waits doesn't lose its place in line.
+func TestPrioritySurvivesARestart(t *testing.T) {
+	dir := t.TempDir()
+	store := testStoreIn(t, dir, stubBinary(t, 0))
+	url := "https://www.crunchyroll.com/series/GYVNXMVP6/cowboy-bebop"
+	entry, err := store.addToWishlist(url, "", 0, 2)
+	if err != nil {
+		t.Fatalf("addToWishlist: %v", err)
+	}
+	if _, err := store.enqueue(entry.URL, entry.ID, jobOptions{Priority: entry.Priority}, ""); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	reloaded, err := newJobStore(dir, testConfig())
+	if err != nil {
+		t.Fatalf("newJobStore: %v", err)
+	}
+	series := reloaded.seriesSnapshot()
+	if len(series) != 1 || series[0].Priority != 2 {
+		t.Fatalf("series = %+v, want one entry at priority 2", series)
+	}
+	reloaded.mu.Lock()
+	defer reloaded.mu.Unlock()
+	if next := reloaded.nextQueuedLocked(); next == nil || next.Options.Priority != 2 {
+		t.Errorf("queued job lost its priority across the restart: %v", next)
+	}
+}
+
+// TestPriorityEndpoint checks the HTTP face of a priority change: the form's
+// shape (URL, season, priority) and the PUT that reorders a series afterwards.
+func TestPriorityEndpoint(t *testing.T) {
+	store := testStore(t, stubBinary(t, 0))
+	web := &webServer{dataDir: store.dataDir, store: store, cfg: store.cfg}
+	server := httptest.NewServer(web.routes())
+	defer server.Close()
+
+	do := func(method, path, body string) (int, string) {
+		req, err := http.NewRequest(method, server.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		res, err := server.Client().Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		defer res.Body.Close()
+		var out strings.Builder
+		buf := make([]byte, 4096)
+		for {
+			n, err := res.Body.Read(buf)
+			out.Write(buf[:n])
+			if err != nil {
+				break
+			}
+			_ = n
+		}
+		return res.StatusCode, out.String()
+	}
+
+	url := "https://www.crunchyroll.com/series/GYVNXMVP6/cowboy-bebop"
+	code, body := do("POST", "/api/wishlist", `{"url":"`+url+`","priority":3}`)
+	if code != http.StatusCreated {
+		t.Fatalf("POST /api/wishlist with a priority = %d %s", code, body)
+	}
+	entry, err := store.addToWishlist(url, "", 0, 0)
+	if err != nil {
+		t.Fatalf("addToWishlist: %v", err)
+	}
+	if entry.Priority != 3 {
+		t.Errorf("priority = %d after adding, want 3", entry.Priority)
+	}
+
+	if code, body := do("PUT", "/api/wishlist/"+entry.ID+"/priority", `{"priority":1}`); code != http.StatusOK {
+		t.Errorf("PUT priority = %d %s", code, body)
+	}
+	if code, body := do("PUT", "/api/wishlist/"+entry.ID+"/priority", `{"priority":7}`); code != http.StatusBadRequest {
+		t.Errorf("PUT an out-of-range priority = %d %s, want 400", code, body)
+	}
+	if code, _ := do("PUT", "/api/wishlist/nope/priority", `{"priority":1}`); code != http.StatusNotFound {
+		t.Errorf("PUT a priority on an unknown series = %d, want 404", code)
+	}
+	if code, _ := do("POST", "/api/series", `{"url":"`+url+`","priority":9}`); code != http.StatusBadRequest {
+		t.Errorf("POST /api/series with a bad priority = %d, want 400", code)
 	}
 }

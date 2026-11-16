@@ -27,6 +27,15 @@
         Temporada
         <input id="add-season" type="number" min="0" value="0" class="narrow" title="0 = todas las temporadas">
       </label>
+      <label class="inline">
+        Prioridad
+        <select id="add-priority" class="narrow" title="Más alta se descarga antes">
+          <option value="0" selected>Normal</option>
+          <option value="1">Media</option>
+          <option value="2">Alta</option>
+          <option value="3">Urgente</option>
+        </select>
+      </label>
       <button type="submit">Añadir a la lista</button>
     </form>
     <p class="hint">Se añade a la lista de series deseadas y empieza a descargarse. Lo que ya está en el destino se salta.</p>

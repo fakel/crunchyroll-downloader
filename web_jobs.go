@@ -51,6 +51,10 @@ type jobOptions struct {
 	DownloadDelay  string `json:"downloadDelay"`
 	AbsoluteNum    bool   `json:"absoluteNumbering"`
 	RenumberSeason bool   `json:"renumberSeasons"`
+
+	// Priority orders the queue, taken from the wishlist when the job is made:
+	// the worker always starts the waiting series with the highest number.
+	Priority int `json:"priority"`
 }
 
 // Job is one download run: a URL plus the options it was queued with, and the
@@ -92,12 +96,13 @@ type Job struct {
 // job; the entry itself stays so "search new" can re-queue it later, and the
 // SxxExx skip means only what's missing gets fetched.
 type wishlistEntry struct {
-	ID      string    `json:"id"`
-	URL     string    `json:"url"`
-	Title   string    `json:"title"`
-	Season  int       `json:"season"` // 0 = every season
-	AddedAt time.Time `json:"addedAt"`
-	LastJob string    `json:"lastJob"` // most recent job ID, for "what happened last time"
+	ID       string    `json:"id"`
+	URL      string    `json:"url"`
+	Title    string    `json:"title"`
+	Season   int       `json:"season"` // 0 = every season
+	Priority int       `json:"priority"`
+	AddedAt  time.Time `json:"addedAt"`
+	LastJob  string    `json:"lastJob"` // most recent job ID, for "what happened last time"
 }
 
 // storeState is the whole persisted state. Jobs and the wishlist share one file
@@ -246,6 +251,14 @@ func (s *jobStore) enqueue(url, seriesID string, opts jobOptions, title string) 
 	// every series at once), so it returns the run that is already there instead
 	// of queuing a second one that would re-skip every episode.
 	if active := s.activeJobLocked(url); active != nil {
+		// A queued run can still be reordered; one that is already downloading
+		// can't, so its priority is what it started with.
+		if active.Status == statusQueued && active.Options.Priority != opts.Priority {
+			active.Options.Priority = opts.Priority
+			if err := s.persistLocked(); err != nil {
+				return nil, err
+			}
+		}
 		return active, nil
 	}
 
@@ -283,14 +296,19 @@ func (s *jobStore) activeJobLocked(url string) *Job {
 }
 
 // addToWishlist stores a series (replacing an existing entry for the same URL,
-// so adding twice updates the season instead of duplicating it).
-func (s *jobStore) addToWishlist(url, title string, season int) (wishlistEntry, error) {
+// so adding twice updates the season instead of duplicating it). A priority of
+// 0 leaves whatever the entry already had, so re-adding a series doesn't quietly
+// reset the order the operator set.
+func (s *jobStore) addToWishlist(url, title string, season, priority int) (wishlistEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for i, entry := range s.state.Wishlist {
 		if entry.URL == url {
 			s.state.Wishlist[i].Season = season
+			if priority > 0 {
+				s.state.Wishlist[i].Priority = priority
+			}
 			if title != "" {
 				s.state.Wishlist[i].Title = title
 			}
@@ -301,12 +319,51 @@ func (s *jobStore) addToWishlist(url, title string, season int) (wishlistEntry, 
 		}
 	}
 
-	entry := wishlistEntry{ID: newID(), URL: url, Title: title, Season: season, AddedAt: time.Now()}
+	entry := wishlistEntry{
+		ID: newID(), URL: url, Title: title, Season: season,
+		Priority: priority, AddedAt: time.Now(),
+	}
 	s.state.Wishlist = append(s.state.Wishlist, entry)
 	if err := s.persistLocked(); err != nil {
 		return wishlistEntry{}, err
 	}
 	return entry, nil
+}
+
+// setPriority changes the priority of a series and of the runs of it that are
+// still waiting, so ordering a series also reorders the queue it sits in.
+// A run already downloading is left alone: cancelling it to start it again is
+// the only way to change what it does, and that's the operator's call.
+func (s *jobStore) setPriority(seriesID string, priority int) error {
+	if !validPriority(priority) {
+		return ErrPriorityOutOfRange
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	index := -1
+	for i, entry := range s.state.Wishlist {
+		if entry.ID == seriesID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return errNotFound
+	}
+
+	url := seriesKey(s.state.Wishlist[index].URL)
+	s.state.Wishlist[index].Priority = priority
+	for _, job := range s.state.Jobs {
+		if job.Status == statusQueued && seriesKey(job.URL) == url {
+			job.Options.Priority = priority
+		}
+	}
+	if err := s.persistLocked(); err != nil {
+		return err
+	}
+	s.wake()
+	return nil
 }
 
 // learnTitle stores the series title a run reported on the job's wishlist
@@ -377,6 +434,7 @@ type seriesEntry struct {
 	URL        string    `json:"url"`
 	Title      string    `json:"title"`
 	Season     int       `json:"season"` // 0 = every season
+	Priority   int       `json:"priority"`
 	AddedAt    time.Time `json:"addedAt"`
 	InWishlist bool      `json:"inWishlist"`
 	Runs       int       `json:"runs"` // how many runs this series has had
@@ -397,7 +455,7 @@ func (s *jobStore) seriesSnapshot() []seriesEntry {
 		byKey[key] = len(entries)
 		entries = append(entries, seriesEntry{
 			ID: entry.ID, URL: entry.URL, Title: entry.Title, Season: entry.Season,
-			AddedAt: entry.AddedAt, InWishlist: true,
+			Priority: entry.Priority, AddedAt: entry.AddedAt, InWishlist: true,
 		})
 	}
 
@@ -411,7 +469,7 @@ func (s *jobStore) seriesSnapshot() []seriesEntry {
 			byKey[key] = index
 			entries = append(entries, seriesEntry{
 				URL: job.URL, Title: job.Title, Season: job.Options.Season,
-				AddedAt: job.CreatedAt,
+				Priority: job.Options.Priority, AddedAt: job.CreatedAt,
 			})
 		}
 		entries[index].Runs++
@@ -429,7 +487,15 @@ func (s *jobStore) seriesSnapshot() []seriesEntry {
 		}
 	}
 
-	sort.SliceStable(entries, func(i, j int) bool { return entries[i].AddedAt.After(entries[j].AddedAt) })
+	// The order the list is drawn in is the order the queue runs in: highest
+	// priority first, and within a priority the most recently added, which is
+	// what a plain queue did before priorities existed.
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].Priority != entries[j].Priority {
+			return entries[i].Priority > entries[j].Priority
+		}
+		return entries[i].AddedAt.After(entries[j].AddedAt)
+	})
 	return entries
 }
 
@@ -536,15 +602,28 @@ func (s *jobStore) wake() {
 	}
 }
 
-// nextQueuedLocked returns the oldest queued job, or nil. Must be called with
-// s.mu held.
+// nextQueuedLocked returns the queued job with the highest priority, or nil.
+// Equal priorities keep their order (oldest first), so without a priority set
+// the queue behaves exactly as before. Must be called with s.mu held.
 func (s *jobStore) nextQueuedLocked() *Job {
+	var next *Job
 	for _, job := range s.state.Jobs {
-		if job.Status == statusQueued {
-			return job
+		if job.Status != statusQueued {
+			continue
+		}
+		if next == nil || job.Options.Priority > next.Options.Priority {
+			next = job
 		}
 	}
-	return nil
+	return next
+}
+
+// ErrPriorityOutOfRange is what a priority outside the accepted range returns.
+var ErrPriorityOutOfRange = errors.New("the priority has to be between 0 and 3")
+
+// validPriority reports whether p is a priority the page offers.
+func validPriority(p int) bool {
+	return p >= 0 && p <= 3
 }
 
 // run is the worker loop: one job at a time, forever. It returns only when stop

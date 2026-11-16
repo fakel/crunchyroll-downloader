@@ -287,6 +287,15 @@ The page has two things:
   one, so pressing the button twice (or `Buscar nuevos en todas`, which covers
   every series at once) costs nothing. `Cancelar` stops the download and
   the FFmpeg it started, and `Registro` shows that run's full log.
+- **Priority**: every series carries a priority — `normal`, `media`, `alta` or
+  `urgente` (0 to 3 in the API) — chosen when it's added and changeable from its
+  row. The worker always starts the waiting series with the highest number, so a
+  show you want now jumps ahead of the ones already queued; equal priorities keep
+  the old first-in-first-out order, which is what the queue did before priorities
+  existed. Changing a priority also reorders the run that series already has
+  waiting. The list is drawn in queue order, so the top row is what downloads
+  next. A run that is already downloading keeps going: stopping it to restart it
+  is your call, and `Cancelar` is there for that.
 - **Ajustes**: the `etp_rt` cookie, the output directory, and local vs SFTP —
   everything `--audio-lang`, `--video-quality`, `--download-delay` and
   `CRDL_SFTP_*` do on the command line. Saved in `config.json` (mode 0600) in the

@@ -48,6 +48,10 @@ const fmtDate = (iso) => {
   return d.toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
 };
 
+// PRIORITY_LABEL names the four levels. The queue runs the highest number first,
+// so "urgent" is the one that jumps the line.
+const PRIORITY_LABEL = { 0: "normal", 1: "media", 2: "alta", 3: "urgente" };
+
 const STATUS_LABEL = {
   queued: "en cola",
   running: "descargando",
@@ -114,6 +118,20 @@ function renderSeries(entry) {
   if (job) meta.push(`última ejecución ${fmtDate(job.createdAt)}`);
   if (entry.runs > 1) meta.push(`${entry.runs} ejecuciones`);
 
+  // A wishlist entry can be reordered; an ad-hoc download is history only, so
+  // it shows the priority it ran with instead of a control that would do nothing.
+  const priority = entry.inWishlist
+    ? el(
+        "select",
+        { class: "priority", title: "Orden en la cola", onchange: (event) => setPriority(entry, Number(event.target.value)) },
+        [0, 1, 2, 3].map((value) =>
+          el("option", { value, selected: value === entry.priority, text: PRIORITY_LABEL[value] })
+        )
+      )
+    : entry.priority
+      ? el("span", { class: "status running", text: PRIORITY_LABEL[entry.priority] })
+      : null;
+
   return el(
     "div",
     { class: "job" },
@@ -129,6 +147,7 @@ function renderSeries(entry) {
       el(
         "div",
         { style: "display:flex;align-items:center;gap:.6rem;flex-wrap:wrap" },
+        priority,
         el("span", { class: `status ${status}`, text: STATUS_LABEL[status] || status }),
         el("div", { class: "job-actions" }, actions)
       )
@@ -165,6 +184,18 @@ async function queueSeries(entry) {
   if (response) {
     const name = entry.title || "La serie";
     say(response.status === "running" ? `${name} ya se está descargando` : `${name}: en cola`);
+  }
+  refresh();
+}
+
+// setPriority reorders a series in the queue. The page redraws from the server's
+// answer, so the list is showing the queue's order and not a local guess.
+async function setPriority(entry, priority) {
+  const response = await guarded(() =>
+    api(`/api/wishlist/${entry.id}/priority`, { method: "PUT", body: JSON.stringify({ priority }) })
+  );
+  if (response && entry.job && entry.job.status === "running") {
+    say(`${entry.title || "La serie"} ya está descargándose; la prioridad se aplicará a la próxima`);
   }
   refresh();
 }
@@ -314,12 +345,14 @@ document.getElementById("add-form").addEventListener("submit", async (event) => 
   const url = document.getElementById("add-url").value.trim();
   const title = document.getElementById("add-title").value.trim();
   const season = Number(document.getElementById("add-season").value || 0);
+  const priority = Number(document.getElementById("add-priority").value || 0);
   const response = await guarded(() =>
-    api("/api/wishlist", { method: "POST", body: JSON.stringify({ url, title, season }) })
+    api("/api/wishlist", { method: "POST", body: JSON.stringify({ url, title, season, priority }) })
   );
   if (response) {
     event.target.reset();
     document.getElementById("add-season").value = "0";
+    document.getElementById("add-priority").value = "0";
     refresh();
   }
 });

@@ -109,12 +109,14 @@ func (w *webServer) routes() http.Handler {
 
 	// /api/series is the same wishlist under the name the plan used.
 	mux.HandleFunc("POST /api/series", w.handleAddWishlist)
+	mux.HandleFunc("PUT /api/series/{id}/priority", w.handleSetPriority)
 	mux.HandleFunc("DELETE /api/series/{id}", w.handleDeleteWishlist)
 	mux.HandleFunc("POST /api/series/{id}/download", w.handleDownloadWishlistEntry)
 
 	mux.HandleFunc("POST /api/wishlist", w.handleAddWishlist)
 	mux.HandleFunc("POST /api/wishlist/download", w.handleDownloadWishlist)
 	mux.HandleFunc("POST /api/wishlist/{id}/download", w.handleDownloadWishlistEntry)
+	mux.HandleFunc("PUT /api/wishlist/{id}/priority", w.handleSetPriority)
 	mux.HandleFunc("DELETE /api/wishlist/{id}", w.handleDeleteWishlist)
 
 	mux.HandleFunc("POST /api/pause", w.handlePause)
@@ -227,11 +229,13 @@ func (w *webServer) handlePutConfig(rw http.ResponseWriter, r *http.Request) {
 }
 
 // jobOptionsFrom turns the current settings into the options a new job keeps.
-func (w *webServer) jobOptionsFrom(season int) jobOptions {
+// The priority is the series' own, since it orders one series against another.
+func (w *webServer) jobOptionsFrom(season, priority int) jobOptions {
 	w.mu.Lock()
 	cfg := w.cfg
 	w.mu.Unlock()
 	return jobOptions{
+		Priority:       priority,
 		Season:         season,
 		VideoQuality:   cfg.VideoQuality,
 		AudioQuality:   cfg.AudioQuality,
@@ -278,8 +282,9 @@ func (w *webServer) handleListJobs(rw http.ResponseWriter, r *http.Request) {
 // wishlist entry).
 func (w *webServer) handleCreateJob(rw http.ResponseWriter, r *http.Request) {
 	var body struct {
-		URL    string `json:"url"`
-		Season int    `json:"season"`
+		URL      string `json:"url"`
+		Season   int    `json:"season"`
+		Priority int    `json:"priority"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(rw, http.StatusBadRequest, "could not read the request: %v", err)
@@ -294,8 +299,12 @@ func (w *webServer) handleCreateJob(rw http.ResponseWriter, r *http.Request) {
 		writeError(rw, http.StatusBadRequest, "the season has to be 0 (every season) or a positive number")
 		return
 	}
+	if !validPriority(body.Priority) {
+		writeError(rw, http.StatusBadRequest, "%v", ErrPriorityOutOfRange)
+		return
+	}
 
-	job, err := w.store.enqueue(body.URL, "", w.jobOptionsFrom(body.Season), "")
+	job, err := w.store.enqueue(body.URL, "", w.jobOptionsFrom(body.Season, body.Priority), "")
 	if err != nil {
 		writeError(rw, http.StatusInternalServerError, "could not queue the download: %v", err)
 		return
@@ -320,6 +329,11 @@ func (w *webServer) handleRetryJob(rw http.ResponseWriter, r *http.Request) {
 	if !ok {
 		writeStoreError(rw, errNotFound)
 		return
+	}
+	// The priority belongs to the series, not to the run, so a retry takes the
+	// current one rather than whatever the old run was queued with.
+	if entry, ok := w.store.wishlistEntryByID(old.SeriesID); ok {
+		old.Options.Priority = entry.Priority
 	}
 	job, err := w.store.enqueue(old.URL, old.SeriesID, old.Options, old.Title)
 	if err != nil {
@@ -425,9 +439,10 @@ func stripANSI(s string) string {
 
 func (w *webServer) handleAddWishlist(rw http.ResponseWriter, r *http.Request) {
 	var body struct {
-		URL    string `json:"url"`
-		Title  string `json:"title"`
-		Season int    `json:"season"`
+		URL      string `json:"url"`
+		Title    string `json:"title"`
+		Season   int    `json:"season"`
+		Priority int    `json:"priority"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(rw, http.StatusBadRequest, "could not read the request: %v", err)
@@ -442,15 +457,19 @@ func (w *webServer) handleAddWishlist(rw http.ResponseWriter, r *http.Request) {
 		writeError(rw, http.StatusBadRequest, "the season has to be 0 (every season) or a positive number")
 		return
 	}
+	if !validPriority(body.Priority) {
+		writeError(rw, http.StatusBadRequest, "%v", ErrPriorityOutOfRange)
+		return
+	}
 
-	entry, err := w.store.addToWishlist(body.URL, strings.TrimSpace(body.Title), body.Season)
+	entry, err := w.store.addToWishlist(body.URL, strings.TrimSpace(body.Title), body.Season, body.Priority)
 	if err != nil {
 		writeError(rw, http.StatusInternalServerError, "could not save the series: %v", err)
 		return
 	}
 	// Adding to the wishlist means "I want this", so it starts downloading
 	// straight away; the entry stays for the next "download everything" pass.
-	job, err := w.store.enqueue(entry.URL, entry.ID, w.jobOptionsFrom(entry.Season), entry.Title)
+	job, err := w.store.enqueue(entry.URL, entry.ID, w.jobOptionsFrom(entry.Season, entry.Priority), entry.Title)
 	if err != nil {
 		writeError(rw, http.StatusInternalServerError, "could not queue the download: %v", err)
 		return
@@ -466,12 +485,29 @@ func (w *webServer) handleDownloadWishlistEntry(rw http.ResponseWriter, r *http.
 		writeStoreError(rw, errNotFound)
 		return
 	}
-	job, err := w.store.enqueue(entry.URL, entry.ID, w.jobOptionsFrom(entry.Season), entry.Title)
+	job, err := w.store.enqueue(entry.URL, entry.ID, w.jobOptionsFrom(entry.Season, entry.Priority), entry.Title)
 	if err != nil {
 		writeError(rw, http.StatusInternalServerError, "could not queue the download: %v", err)
 		return
 	}
 	writeJSON(rw, http.StatusCreated, job)
+}
+
+// handleSetPriority reorders a series in the queue. Runs already downloading are
+// untouched: only what is still waiting gets the new place in line.
+func (w *webServer) handleSetPriority(rw http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Priority int `json:"priority"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(rw, http.StatusBadRequest, "could not read the request: %v", err)
+		return
+	}
+	if err := w.store.setPriority(r.PathValue("id"), body.Priority); err != nil {
+		writeStoreError(rw, err)
+		return
+	}
+	writeJSON(rw, http.StatusOK, map[string]int{"priority": body.Priority})
 }
 
 // handleDownloadWishlist queues every series in the list, in order. The queue is
@@ -485,7 +521,7 @@ func (w *webServer) handleDownloadWishlist(rw http.ResponseWriter, r *http.Reque
 		if before {
 			skipped++
 		}
-		job, err := w.store.enqueue(entry.URL, entry.ID, w.jobOptionsFrom(entry.Season), entry.Title)
+		job, err := w.store.enqueue(entry.URL, entry.ID, w.jobOptionsFrom(entry.Season, entry.Priority), entry.Title)
 		if err != nil {
 			writeError(rw, http.StatusInternalServerError, "could not queue %s: %v", entry.URL, err)
 			return
@@ -524,6 +560,10 @@ func (w *webServer) handlePause(rw http.ResponseWriter, r *http.Request) {
 func writeStoreError(rw http.ResponseWriter, err error) {
 	if errors.Is(err, errNotFound) {
 		writeError(rw, http.StatusNotFound, "not found")
+		return
+	}
+	if errors.Is(err, ErrPriorityOutOfRange) {
+		writeError(rw, http.StatusBadRequest, "%v", err)
 		return
 	}
 	writeError(rw, http.StatusConflict, "%v", err)

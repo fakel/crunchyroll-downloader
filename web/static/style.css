@@ -210,3 +210,12 @@ dialog footer { padding: .1rem 1rem .7rem; }
   .span-2 { grid-column: span 1; }
   td.url, th:nth-child(3), td:nth-child(3) { display: none; }
 }
+
+/* The priority picker sits with the status pill, small enough not to compete with
+   the series title. */
+select.priority {
+  width: auto;
+  padding: .25rem .45rem;
+  font-size: .78rem;
+  border-radius: 6px;
+}
