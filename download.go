@@ -676,7 +676,8 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 				fail(fmt.Errorf("parsing manifest for %s: %w", version.locale, err))
 				return
 			}
-			pssh := getPssh(manifest)
+			// The raw manifest: getPssh matches the tag whichever namespace it's in.
+			pssh := getPssh(body)
 			if pssh == nil {
 				fail(fmt.Errorf("PSSH not found for %s", version.locale))
 				return

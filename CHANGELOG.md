@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Dependencies updated (mp4ff 0.63, go-mpd) and `go.mod` now requires Go 1.26
+- PSSH extraction now parses the manifest directly instead of relying on `go-mpd`'s `Descriptor`. Upstream changed the struct tag from `pssh` to `cenc:pssh`, which `encoding/xml` reads as a literal element name and so never matches a namespaced `<cenc:pssh>`; upgrading the module silently made every download fail with "PSSH not found". A test now covers both the prefixed and unprefixed element
 
 ## 1.6.0
 

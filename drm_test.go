@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/Eyevinn/mp4ff/mp4"
-	gompd "github.com/unki2aut/go-mpd"
 )
 
 var playReadySystemID = mp4.UUID{0x9a, 0x04, 0xf0, 0x79, 0x98, 0x40, 0x42, 0x86, 0xab, 0x92, 0xe6, 0x5b, 0xe0, 0x88, 0x5f, 0x95}
@@ -58,73 +57,76 @@ func TestToWidevinePssh(t *testing.T) {
 	})
 }
 
+// manifest is a minimal MPD carrying the given ContentProtection elements,
+// exactly as Crunchyroll writes them: the PSSH lives in a namespaced
+// <cenc:pssh> child. That prefix is the whole point of these tests — a struct tag
+// spelled "cenc:pssh" never matches it (encoding/xml treats it as a literal name),
+// which silently lost every PSSH when go-mpd was upgraded.
+func manifest(adaptationProtections, representationProtections string) []byte {
+	if representationProtections != "" {
+		representationProtections = "<Representation id=\"v0\">" + representationProtections + "</Representation>"
+	}
+	return []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" xmlns:cenc="urn:mpeg:cenc:2013" type="static">
+  <Period>
+    <AdaptationSet contentType="video">` + adaptationProtections + representationProtections + `</AdaptationSet>
+  </Period>
+</MPD>`)
+}
+
+const (
+	widevineURI  = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
+	playReadyURI = "urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95"
+
+	widevinePssh  = "widevine-pssh"
+	playReadyPssh = "playready-pssh"
+
+	playReadyProtection = `<ContentProtection schemeIdUri="` + playReadyURI + `"><cenc:pssh>` + playReadyPssh + `</cenc:pssh></ContentProtection>`
+	widevineProtection  = `<ContentProtection schemeIdUri="` + widevineURI + `"><cenc:pssh>` + widevinePssh + `</cenc:pssh></ContentProtection>`
+)
+
 func TestGetPsshPrefersWidevine(t *testing.T) {
-	widevineURI := "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
-	playReadyURI := "urn:uuid:9a04f079-9840-4286-ab92-e65be0885f95"
-	widevinePssh := "widevine-pssh"
-	playReadyPssh := "playready-pssh"
+	tests := []struct {
+		name               string
+		adaptation, repres string
+		want               string
+	}{
+		{"widevine preferred over playready", playReadyProtection + widevineProtection, "", widevinePssh},
+		{"falls back when no widevine scheme", playReadyProtection, "", playReadyPssh},
+		{"nil when no pssh", `<ContentProtection schemeIdUri="` + widevineURI + `"/>`, "", ""},
+		{"representation level widevine pssh", "", playReadyProtection + widevineProtection, widevinePssh},
+		{"representation level fallback", "", playReadyProtection, playReadyPssh},
+	}
 
-	t.Run("widevine preferred over playready", func(t *testing.T) {
-		m := &gompd.MPD{
-			Period: []*gompd.Period{
-				{AdaptationSets: []*gompd.AdaptationSet{
-					{ContentProtections: []gompd.Descriptor{
-						{SchemeIDURI: &playReadyURI, CencPSSH: &playReadyPssh},
-						{SchemeIDURI: &widevineURI, CencPSSH: &widevinePssh},
-					}},
-				}},
-			},
-		}
-		if got := getPssh(m); got == nil || *got != widevinePssh {
-			t.Fatalf("getPssh() = %v, want the widevine PSSH", got)
-		}
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := getPssh(manifest(tt.adaptation, tt.repres))
+			if tt.want == "" {
+				if got != nil {
+					t.Fatalf("getPssh() = %q, want nil", *got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("getPssh() = nil, want %q", tt.want)
+			}
+			if *got != tt.want {
+				t.Fatalf("getPssh() = %q, want %q", *got, tt.want)
+			}
+		})
+	}
+}
 
-	t.Run("falls back when no widevine scheme", func(t *testing.T) {
-		m := &gompd.MPD{
-			Period: []*gompd.Period{
-				{AdaptationSets: []*gompd.AdaptationSet{
-					{ContentProtections: []gompd.Descriptor{
-						{SchemeIDURI: &playReadyURI, CencPSSH: &playReadyPssh},
-					}},
-				}},
-			},
-		}
-		if got := getPssh(m); got == nil || *got != playReadyPssh {
-			t.Fatalf("getPssh() = %v, want the fallback PSSH", got)
-		}
-	})
+func TestGetPsshUnprefixedElement(t *testing.T) {
+	// Some manifests write <pssh> without the cenc: prefix; both must parse.
+	body := manifest("<ContentProtection schemeIdUri=\""+widevineURI+"\"><pssh>"+widevinePssh+"</pssh></ContentProtection>", "")
+	if got := getPssh(body); got == nil || *got != widevinePssh {
+		t.Fatalf("getPssh() = %v, want the unprefixed widevine PSSH", got)
+	}
+}
 
-	t.Run("nil when no pssh", func(t *testing.T) {
-		m := &gompd.MPD{
-			Period: []*gompd.Period{
-				{AdaptationSets: []*gompd.AdaptationSet{
-					{ContentProtections: []gompd.Descriptor{
-						{SchemeIDURI: &widevineURI},
-					}},
-				}},
-			},
-		}
-		if got := getPssh(m); got != nil {
-			t.Fatalf("getPssh() = %v, want nil", got)
-		}
-	})
-
-	t.Run("representation level widevine pssh", func(t *testing.T) {
-		m := &gompd.MPD{
-			Period: []*gompd.Period{
-				{AdaptationSets: []*gompd.AdaptationSet{
-					{Representations: []gompd.Representation{
-						{ContentProtections: []gompd.Descriptor{
-							{SchemeIDURI: &playReadyURI, CencPSSH: &playReadyPssh},
-							{SchemeIDURI: &widevineURI, CencPSSH: &widevinePssh},
-						}},
-					}},
-				}},
-			},
-		}
-		if got := getPssh(m); got == nil || *got != widevinePssh {
-			t.Fatalf("getPssh() = %v, want the widevine PSSH", got)
-		}
-	})
+func TestGetPsshMalformedXML(t *testing.T) {
+	if got := getPssh([]byte("<MPD><Period>")); got != nil {
+		t.Fatalf("getPssh() = %q, want nil for malformed XML", *got)
+	}
 }

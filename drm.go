@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -14,7 +15,6 @@ import (
 	"github.com/Eyevinn/mp4ff/mp4"
 	"github.com/iyear/gowidevine"
 	"github.com/iyear/gowidevine/widevinepb"
-	"github.com/unki2aut/go-mpd"
 )
 
 // widevineSystemID is the Widevine DRM system ID, used to tag PSSH boxes.
@@ -24,38 +24,58 @@ var widevineSystemID = mp4.UUID{0xed, 0xef, 0x8b, 0xa9, 0x79, 0xd6, 0x4a, 0xce, 
 // MPD by its schemeIdUri.
 const widevineSchemeSuffix = "edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
 
+// psshContentProtection is the part of a ContentProtection element that carries
+// the PSSH. The element is namespaced (`xmlns:cenc="urn:mpeg:cenc:2013"`), and
+// the struct tag deliberately omits the prefix: encoding/xml then matches on the
+// local name whatever prefix the manifest happens to use. go-mpd's own
+// Descriptor is not used for this because it spells the tag "cenc:pssh", which
+// encoding/xml reads as a literal element name and so never matches.
+type psshContentProtection struct {
+	SchemeIDURI string `xml:"schemeIdUri,attr"`
+	PSSH        string `xml:"pssh"`
+}
+
+// psshManifest is the subset of the MPD tree needed to find a PSSH. Crunchyroll
+// serves two shapes: ContentProtection on the AdaptationSet, or on each
+// Representation, so both levels are decoded.
+type psshManifest struct {
+	AdaptationSets []struct {
+		ContentProtections []psshContentProtection `xml:"ContentProtection"`
+		Representations    []struct {
+			ContentProtections []psshContentProtection `xml:"ContentProtection"`
+		} `xml:"Representation"`
+	} `xml:"Period>AdaptationSet"`
+}
+
 // psshFromProtections returns the Widevine PSSH carried by a list of
 // ContentProtection elements, falling back to the first PSSH if none of them is
 // explicitly Widevine. Crunchyroll also lists a PlayReady/common system ID
 // (9a04f079-9840-4286-ab92-e65be0885f95) alongside Widevine, so the first PSSH
 // is not always the right one.
-func psshFromProtections(protections []mpd.Descriptor) *string {
+func psshFromProtections(protections []psshContentProtection) *string {
 	var fallback *string
 	for _, contentProtection := range protections {
-		if contentProtection.CencPSSH == nil {
+		if contentProtection.PSSH == "" {
 			continue
 		}
-		if contentProtection.SchemeIDURI != nil && strings.Contains(*contentProtection.SchemeIDURI, widevineSchemeSuffix) {
-			return contentProtection.CencPSSH
+		value := contentProtection.PSSH
+		if strings.Contains(contentProtection.SchemeIDURI, widevineSchemeSuffix) {
+			return &value
 		}
 		if fallback == nil {
-			fallback = contentProtection.CencPSSH
+			fallback = &value
 		}
 	}
 	return fallback
 }
 
-// getPssh finds the PSSH in the MPD manifest. Crunchyroll serves two manifest
-// shapes: one puts ContentProtection on the AdaptationSet, the other on each
-// Representation, so both are searched. The Widevine PSSH is preferred.
-func getPssh(m *mpd.MPD) *string {
-	if len(m.Period) == 0 {
+// getPssh finds the PSSH in the raw MPD manifest, preferring the Widevine one.
+func getPssh(body []byte) *string {
+	var manifest psshManifest
+	if err := xml.Unmarshal(body, &manifest); err != nil {
 		return nil
 	}
-	for _, set := range m.Period[0].AdaptationSets {
-		if set == nil {
-			continue
-		}
+	for _, set := range manifest.AdaptationSets {
 		if pssh := psshFromProtections(set.ContentProtections); pssh != nil {
 			return pssh
 		}
