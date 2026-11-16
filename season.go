@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 type SeasonEpisodes struct {
@@ -63,6 +64,69 @@ type Season struct {
 	ID           string `json:"id"`
 	SeasonNumber int    `json:"season_number"`
 	Title        string `json:"title"`
+}
+
+// seasonKind says how a Crunchyroll "season" should be laid out on disk:
+// as a real season, as specials, or as extras.
+//
+// Crunchyroll models all three the same way, so a show whose listing includes a
+// one-off special or a pile of bonus clips otherwise lands them in numbered
+// season folders the series doesn't have, and media servers show them as if they
+// were regular episodes of it.
+type seasonKind int
+
+const (
+	seasonRegular seasonKind = iota
+	seasonSpecials
+	seasonExtras
+)
+
+// kind classifies a season from its title, which is where Crunchyroll says what
+// it is: "Dr. STONE Special Episode - RYUSUI", "Extras". A regular season is
+// titled after the series ("Dr. STONE Season 2"), so these terms don't collide
+// with it in practice.
+func (s Season) kind() seasonKind {
+	title := strings.ToLower(s.Title)
+	switch {
+	case strings.Contains(title, "extras"), strings.Contains(title, "bonus"):
+		return seasonExtras
+	case strings.Contains(title, "special"):
+		return seasonSpecials
+	}
+	return seasonRegular
+}
+
+// seasonTarget is where a Crunchyroll season's episodes should be filed, which
+// is not always Crunchyroll's own season number: see seasonTargets.
+type seasonTarget struct {
+	kind   seasonKind
+	number int
+}
+
+// seasonTargets resolves where each season of a series belongs.
+//
+// Crunchyroll numbers every entry in a series' listing as a season, including
+// the one-off specials and the extras, so a show with two specials and four real
+// seasons is numbered 1..6 and the real seasons land in Season 01, 02, 04, 05
+// with a hole where the specials used to be. Those holes are what -renumber-seasons
+// removes: the regular seasons are renumbered 1..n in listing order, so the
+// folders are contiguous and match how TMDB/TheTVDB index the show. Specials and
+// extras keep their own placement (season 0 and Extras/) and are never counted.
+func seasonTargets(seasons []Season) map[string]seasonTarget {
+	targets := make(map[string]seasonTarget, len(seasons))
+	regular := 0
+	for _, season := range seasons {
+		kind := season.kind()
+		number := season.SeasonNumber
+		if kind == seasonRegular {
+			regular++
+			if renumberSeasons != nil && *renumberSeasons {
+				number = regular
+			}
+		}
+		targets[season.ID] = seasonTarget{kind: kind, number: number}
+	}
+	return targets
 }
 
 func getSeasons(contentId string, audioLocale string, subLocale string) []Season {

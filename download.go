@@ -478,11 +478,19 @@ func availableSubtitleLangs(tracks map[string]*Subtitle) []string {
 // Crunchyroll splits into artificial seasons: One Piece's "Season 4" (Alabasta)
 // is E62-143 of a single season everywhere else.
 func seasonEpisodeNumbers(info EpisodeInfo) (season, episode int) {
-	// -absolute-numbering puts every episode in Season 01 and keeps its own
-	// number, which is how media servers index long-running shows that
-	// Crunchyroll splits into artificial seasons.
+	// Specials are season 0 to every media server, whatever season number
+	// Crunchyroll happened to give the season holding them.
+	if info.SeasonKind == seasonSpecials {
+		return 0, info.EpisodeMetadata.EpisodeNumber
+	}
+	// -absolute-numbering is the most invasive of the two, so it wins: every
+	// episode goes to Season 01 whatever the season was numbered.
 	if absoluteNum != nil && *absoluteNum {
 		return 1, info.EpisodeMetadata.EpisodeNumber
+	}
+	// -renumber-seasons closes the gaps specials leave in the numbering.
+	if info.SeasonNumberOverride > 0 {
+		return info.SeasonNumberOverride, info.EpisodeMetadata.EpisodeNumber
 	}
 	return info.EpisodeMetadata.SeasonNumber, info.EpisodeMetadata.EpisodeNumber
 }
@@ -492,7 +500,9 @@ func seasonEpisodeNumbers(info EpisodeInfo) (season, episode int) {
 //	<base>/<Series> (<Year>)/Season NN/<Series> (<Year>) SxxExx - <Title>.mkv
 //
 // The year is what lets Jellyfin tell remakes and reboots sharing a title
-// apart, and the season folder keeps every season of a series together.
+// apart, and the season folder keeps every season of a series together. A
+// season Crunchyroll lists as specials or extras goes to "Specials" (season 0)
+// or "Extras" instead, which is where media servers look for them.
 func jellyfinEpisodePath(baseDirectory string, info EpisodeInfo, videoQuality string) string {
 	seriesName := sanitizeFilename(info.EpisodeMetadata.SeriesTitle)
 	if info.SeriesLaunchYear > 0 {
@@ -502,13 +512,19 @@ func jellyfinEpisodePath(baseDirectory string, info EpisodeInfo, videoQuality st
 	return filepath.Join(
 		baseDirectory,
 		seriesName,
-		seasonFolder(season),
+		seasonFolder(info, season),
 		fmt.Sprintf("%s S%02dE%02d - %s [%s].mkv", seriesName, season, episode, sanitizeFilename(info.Title), videoQuality),
 	)
 }
 
 // seasonFolder is the directory name holding a season's episodes.
-func seasonFolder(season int) string {
+func seasonFolder(info EpisodeInfo, season int) string {
+	switch info.SeasonKind {
+	case seasonSpecials:
+		return "Specials"
+	case seasonExtras:
+		return "Extras"
+	}
 	return fmt.Sprintf("Season %02d", season)
 }
 
@@ -880,8 +896,8 @@ func downloadEpisodeWithRetry(baseContentId string, info EpisodeInfo, audioLangs
 	}
 }
 
-func downloadSeason(videoQuality, audioQuality *string, audioLangs, subsLangs, ccLangs []string, episodes []SeasonEpisode, baseDirectory string) {
-	fmt.Printf("Downloading season %v of %s (%v episodes)\n\n", episodes[0].SeasonNumber, episodes[0].SeriesTitle, len(episodes))
+func downloadSeason(videoQuality, audioQuality *string, audioLangs, subsLangs, ccLangs []string, episodes []SeasonEpisode, target seasonTarget, baseDirectory string) {
+	fmt.Printf("Downloading season %v of %s (%v episodes)\n\n", target.number, episodes[0].SeriesTitle, len(episodes))
 
 	var failed []string
 
@@ -896,7 +912,9 @@ func downloadSeason(videoQuality, audioQuality *string, audioLangs, subsLangs, c
 				Versions:           episode.Versions,
 				AvailabilityStarts: episode.AvailabilityStarts,
 			},
-			Title: episode.Title,
+			Title:                episode.Title,
+			SeasonKind:           target.kind,
+			SeasonNumberOverride: target.number,
 		}
 		// Cached, so this is one request for the whole season.
 		info.SeriesLaunchYear = getSeriesInfo(episode.SeriesID).LaunchYear

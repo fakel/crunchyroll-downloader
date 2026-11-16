@@ -117,6 +117,13 @@ type EpisodeInfo struct {
 	// getSeriesInfo so the output folder can carry the year Jellyfin needs to
 	// tell remakes apart. 0 means unknown.
 	SeriesLaunchYear int `json:"-"`
+	// SeasonKind is filled in from the season the episode came from, so a
+	// special or an extras clip is filed as such instead of as a regular season.
+	SeasonKind seasonKind `json:"-"`
+	// SeasonNumberOverride is the season number to file the episode under when
+	// -renumber-seasons makes it differ from Crunchyroll's own numbering. 0 means
+	// use Crunchyroll's.
+	SeasonNumberOverride int `json:"-"`
 }
 
 type EpisodeMetadata struct {
