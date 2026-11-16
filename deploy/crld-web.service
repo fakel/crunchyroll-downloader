@@ -1,0 +1,27 @@
+[Unit]
+Description=Crunchyroll Downloader web interface
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=crdl
+Group=crdl
+WorkingDirectory=/opt/crunchyroll-downloader
+ExecStart=/opt/crunchyroll-downloader/crunchyroll-downloader --serve --listen 127.0.0.1:8080 --data-dir /var/lib/crunchyroll-downloader/state
+
+# A download that dies should come back on its own; a job that was mid-flight
+# shows up as "interrupted" and its retry button skips what already exists.
+Restart=always
+RestartSec=5
+
+# The program only touches its own directories: the download target and its
+# state. Nothing else in the system is its business.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/crunchyroll-downloader /srv/downloads
+
+[Install]
+WantedBy=multi-user.target

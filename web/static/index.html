@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crunchyroll Downloader</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+  <h1>Crunchyroll Downloader</h1>
+  <div class="header-right">
+    <span id="queue-state" class="pill">…</span>
+    <button id="pause-btn" class="secondary" type="button">Pausar</button>
+  </div>
+</header>
+
+<main>
+
+  <section class="card">
+    <h2>Descargar una serie o episodio</h2>
+    <form id="add-form" class="row-form">
+      <input id="add-url" type="url" required placeholder="https://www.crunchyroll.com/series/GYVNXMVP6/cowboy-bebop">
+      <input id="add-title" type="text" placeholder="Título (opcional, lo aprende solo)">
+      <label class="inline">
+        Temporada
+        <input id="add-season" type="number" min="0" value="0" class="narrow" title="0 = todas las temporadas">
+      </label>
+      <button type="submit">Añadir a la lista</button>
+    </form>
+    <p class="hint">Se añade a la lista de series deseadas y empieza a descargarse. Lo que ya está en el destino se salta.</p>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>Series</h2>
+      <div style="display:flex;align-items:center;gap:.7rem;flex-wrap:wrap">
+        <span id="series-status" class="hint"></span>
+        <button id="download-all-btn" class="secondary" type="button">Buscar nuevos en todas</button>
+      </div>
+    </div>
+    <div id="series"></div>
+    <p id="series-empty" class="empty">Todavía no hay series. Añade una arriba.</p>
+  </section>
+
+  <section class="card">
+    <h2>Ajustes</h2>
+    <form id="config-form">
+      <div class="grid">
+        <label>
+          Carpeta de descarga
+          <input name="downloadDir" type="text" placeholder="/srv/downloads">
+        </label>
+        <label>
+          Destino
+          <select name="destination">
+            <option value="local">Solo local (se queda en la carpeta)</option>
+            <option value="sftp">SFTP (sube cada episodio y borra el local)</option>
+          </select>
+        </label>
+        <label>
+          Calidad de vídeo
+          <select name="videoQuality">
+            <option>1080p</option>
+            <option>720p</option>
+            <option>480p</option>
+            <option>360p</option>
+            <option>best</option>
+          </select>
+        </label>
+        <label>
+          Calidad de audio
+          <select name="audioQuality">
+            <option>192k</option>
+            <option>128k</option>
+            <option>96k</option>
+          </select>
+        </label>
+        <label>
+          Idioma de audio
+          <input name="audioLang" type="text" placeholder="ja-JP">
+        </label>
+        <label>
+          Subtítulos
+          <input name="subsLang" type="text" placeholder="es-419,en-US">
+        </label>
+        <label>
+          Closed captions
+          <input name="ccLang" type="text" placeholder="(ninguno)">
+        </label>
+        <label>
+          Pausa entre episodios
+          <input name="downloadDelay" type="text" placeholder="40s">
+        </label>
+        <label class="span-2">
+          Cookie <code>etp_rt</code>
+          <input id="etp-rt" type="password" autocomplete="off" placeholder="(guardada)">
+          <span class="hint" id="etp-rt-state"></span>
+        </label>
+      </div>
+
+      <div class="checks">
+        <label><input name="renumberSeasons" type="checkbox"> Renumerar temporadas 1..n (saltando especiales)</label>
+        <label><input name="absoluteNumbering" type="checkbox"> Numeración absoluta (todo en Season 01)</label>
+      </div>
+
+      <fieldset id="sftp-fields">
+        <legend>Servidor SFTP</legend>
+        <div class="grid">
+          <label>Host <input name="sftp.host" type="text" placeholder="192.168.8.2"></label>
+          <label>Puerto <input name="sftp.port" type="text" placeholder="22"></label>
+          <label>Usuario <input name="sftp.user" type="text" placeholder="root"></label>
+          <label>
+            Contraseña
+            <input name="sftp-password" type="password" autocomplete="off" placeholder="(guardada)">
+            <span class="hint" id="sftp-password-state"></span>
+          </label>
+          <label>Clave privada <input name="sftp.keyFile" type="text" placeholder="(sin clave)"></label>
+          <label>Carpeta remota <input name="sftp.remoteDir" type="text" placeholder="/boveda/multimedia/series"></label>
+          <label class="span-2">known_hosts <input name="sftp.knownHosts" type="text" placeholder="~/.ssh/known_hosts"></label>
+        </div>
+        <label class="check"><input name="sftp.keepLocal" type="checkbox"> No borrar el archivo local tras subirlo</label>
+      </fieldset>
+
+      <div class="form-foot">
+        <button type="submit">Guardar ajustes</button>
+        <span id="config-status" class="hint"></span>
+      </div>
+    </form>
+  </section>
+
+</main>
+
+<dialog id="log-dialog">
+  <header>
+    <h2 id="log-title">Registro</h2>
+    <div>
+      <label class="check"><input id="log-follow" type="checkbox" checked> Seguir</label>
+      <button id="log-close" class="secondary" type="button">Cerrar</button>
+    </div>
+  </header>
+  <pre id="log-body"></pre>
+  <footer><span id="log-status" class="hint"></span></footer>
+</dialog>
+
+<script src="/app.js"></script>
+</body>
+</html>

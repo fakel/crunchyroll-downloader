@@ -1,0 +1,29 @@
+# Caddy site for the Crunchyroll Downloader web interface.
+#
+# install.sh fills in the address and the password hash and copies this to
+# /etc/caddy/Caddyfile. On a LAN you can keep ":80" (the address below) and
+# browse http://<lxc-ip>/; with a real DNS name, Caddy gets a certificate on its
+# own.
+#
+# The password hash is written by `caddy hash-password`. The app itself speaks
+# plain HTTP on 127.0.0.1:8080 and has no login of its own, so this file is the
+# only thing standing between the queue and the network.
+
+{
+	admin off
+}
+
+:80 {
+	encode zstd gzip
+
+	basic_auth {
+		# USERNAME HASH: filled in by install.sh
+		__CRDL_USER__ __CRDL_HASH__
+	}
+
+	# Uploads are large (an episode is a few hundred MB) and a log poll is tiny;
+	# a generous body limit keeps both working.
+	reverse_proxy 127.0.0.1:8080 {
+		flush_interval -1
+	}
+}

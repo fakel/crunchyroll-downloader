@@ -132,7 +132,24 @@ func processUrl(url string) {
 func main() {
 	url := flag.String("url", "", "URL of the episode/season to download")
 	urlsFile := flag.String("file", "", "Path to a text file with one URL per line")
+	serve := flag.Bool("serve", false, "Run the web interface instead of downloading (settings live in --data-dir, not in flags)")
+	listen := flag.String("listen", "127.0.0.1:8080", "Address the web interface listens on (with --serve)")
+	dataDir := flag.String("data-dir", "", "Where the web interface keeps its settings, job list and logs (with --serve; default $XDG_DATA_HOME/crunchyroll-downloader)")
 	flag.Parse()
+
+	// The web interface runs the same program as a child for each download, so it
+	// has to be checked before the flags a download needs, which it doesn't take.
+	if *serve {
+		dir := *dataDir
+		if dir == "" {
+			dir = defaultDataDir()
+		}
+		if err := serveWeb(*listen, dir); err != nil {
+			fmt.Printf("The web interface stopped: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	// The cookie is long-lived, so it can come from the environment instead of
 	// being pasted into every command line.

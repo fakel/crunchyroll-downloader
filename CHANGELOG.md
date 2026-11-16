@@ -20,6 +20,15 @@
 - Added `--renumber-seasons` for shows where a special or an extras season sits among the real seasons in Crunchyroll's listing: the regular seasons are numbered 1..n so the folders are contiguous and match TMDB/TheTVDB (Dr. STONE goes from `Season 01, 02, 04, 05` to `Season 01..04`). Specials and extras aren't counted, so they never cause a gap
 - `--etp-rt` can be supplied through `CRDL_ETP_RT` instead of the command line, so the cookie doesn't sit in shell history or in a scheduled command
 - Added `CRDL_PROGRESS=plain`, which turns the animated progress bars into one plain line per update (`progress: video 62% 22.0 Mbps`), for logs and for anything that isn't a terminal
+- Added a web interface (`--serve`), so a machine can be left downloading without a terminal: a wishlist of series that queues a job when added and can be re-queued later for new episodes, a one-at-a-time queue with the current episode, per-track progress and the reason a job is waiting, the full log of every run (streamed by offset, downloadable as a file), cancel that also stops the FFmpeg the job started, and a settings form for the cookie, the output directory, local vs SFTP and the quality/language/delay options. The page runs the same binary as a child process with the same flags, so the verified download path is untouched
+- The web interface lists one row per series instead of one per run: a series downloaded ten times over its life is still one thing the operator wants, so the row shows its latest run (progress, current episode, waiting reason, failures) and how many runs it has had
+- A series that is already queued or downloading is no longer queued twice: "search new" returns the run that is already there, it survives the button being pressed twice, or applied to every series at once
+- A job that was running when the server stopped is shown as `interrupted` with a retry button instead of being stuck as running
+- The web settings are stored in `config.json` (mode 0600) and never sent back to the browser: `GET /api/config` reports `hasEtpRt` / `hasSecret` instead of the values
+- Added `install.sh` and `deploy/`: installs FFmpeg and Caddy, the binary and the Widevine device into `/opt/crunchyroll-downloader`, a `crdl` user and its directories, the `crld-web` systemd service, and a Caddy site with a hashed password in front of `127.0.0.1:8080`
+- `install.sh` restarts Caddy after writing its site: the package starts Caddy before the file exists, so `enable --now` alone left it serving its own placeholder page with no password in front of the queue
+- A run that found every episode already downloaded no longer leaves an empty season folder behind on the local disk: the folder is created when an episode is really going to be downloaded, and a local file deleted after its upload takes its empty folder with it
+- The page reports a run as `failed` with the episodes that could not be downloaded even when the program exits immediately: its output is read from a pipe this process owns, so the last lines (the failure list) can no longer be lost when the child exits before they are read
 
 ## 1.6.0
 
