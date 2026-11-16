@@ -113,6 +113,10 @@ type EpisodeInfo struct {
 	EpisodeMetadata EpisodeMetadata `json:"episode_metadata"`
 	// Episode title
 	Title string `json:"title"`
+	// SeriesLaunchYear is not part of the episode payload; it's filled in from
+	// getSeriesInfo so the output folder can carry the year Jellyfin needs to
+	// tell remakes apart. 0 means unknown.
+	SeriesLaunchYear int `json:"-"`
 }
 
 type EpisodeMetadata struct {
@@ -120,6 +124,7 @@ type EpisodeMetadata struct {
 	EpisodeNumber int    `json:"episode_number"`
 	SeasonNumber  int    `json:"season_number"`
 	SeriesTitle   string `json:"series_title"`
+	SeriesID      string `json:"series_id"`
 	// AvailabilityStarts represents the date when the episode was released on Crunchyroll
 	AvailabilityStarts string        `json:"availability_starts"`
 	Versions           []*DubVersion `json:"versions"`
@@ -130,29 +135,36 @@ type DubVersion struct {
 	GUID        string `json:"guid"`
 }
 
-func getEpisodeInfo(id string) EpisodeInfo {
+func getEpisodeInfo(id string) (EpisodeInfo, error) {
 	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("https://www.crunchyroll.com/content/v2/cms/objects/%s?ratings=true&preferred_audio_language=ja-JP&locale=en-US", id), nil)
 	if err != nil {
-		panic(err)
+		return EpisodeInfo{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0")
 	resp, err := DoRequest(req)
 	if err != nil {
-		panic(err)
+		return EpisodeInfo{}, err
 	}
 	defer resp.Body.Close()
 
 	var info EpisodeMetadataResponse
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		panic(err)
+		return EpisodeInfo{}, err
 	}
 	if err = json.Unmarshal(body, &info); err != nil {
-		panic(err)
+		return EpisodeInfo{}, fmt.Errorf("parsing the episode: %w", err)
 	}
 
-	return info.Data[0]
+	// An unknown episode ID comes back as a well-formed response with no data, so
+	// indexing [0] blindly used to panic with "index out of range" instead of
+	// telling the user their URL is wrong.
+	if len(info.Data) == 0 {
+		return EpisodeInfo{}, fmt.Errorf("episode %s not found (HTTP %d); check the URL", id, resp.StatusCode)
+	}
+
+	return info.Data[0], nil
 }
 
 // deleteStream removes the stream to make Crunchyroll think we "left" the playback.
