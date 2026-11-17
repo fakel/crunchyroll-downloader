@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Series can now be given a priority (0-3: normal, media, alta, urgente) when they are added and changed afterwards from their row. The queue always starts the waiting series with the highest priority; equal priorities keep the old first-in-first-out order, so with no priority set the queue behaves exactly as before. Changing a priority also reorders the run that series already has waiting, and a run already downloading is left alone. The list is drawn in queue order
+- Series can now be given a priority (0-3: normal, media, alta, urgente) when they are added and changed afterwards from their row. The queue always starts the waiting series with the highest priority; equal priorities keep the old first-in-first-out order, so with no priority set the queue behaves exactly as before. Changing a priority also reorders the run that series already has waiting, and a run already downloading is left alone. The list is grouped: series that haven't downloaded yet (or are queued) first, then the one downloading, then the ones that already ran, each group by priority
 - Dependencies updated (mp4ff 0.63, sftp 1.13.12, x/crypto 0.59, go-mpd) and `go.mod` now requires Go 1.26
 - PSSH extraction now parses the manifest directly instead of relying on `go-mpd`'s `Descriptor`. Upstream changed the struct tag from `pssh` to `cenc:pssh`, which `encoding/xml` reads as a literal element name and so never matches a namespaced `<cenc:pssh>`; upgrading the module silently made every download fail with "PSSH not found". A test now covers both the prefixed and unprefixed element
 - An invalid episode URL now fails with `episode X not found (HTTP 404); check the URL` instead of crashing with `panic: runtime error: index out of range [0] with length 0`

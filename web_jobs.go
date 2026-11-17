@@ -487,16 +487,36 @@ func (s *jobStore) seriesSnapshot() []seriesEntry {
 		}
 	}
 
-	// The order the list is drawn in is the order the queue runs in: highest
-	// priority first, and within a priority the most recently added, which is
-	// what a plain queue did before priorities existed.
+	// What is still to come first, then what is being downloaded, then what is
+	// finished. Within a group the highest priority comes first, and within a
+	// priority the most recently added, which is what a plain queue did before
+	// priorities existed.
 	sort.SliceStable(entries, func(i, j int) bool {
+		bi, bj := seriesBucket(entries[i]), seriesBucket(entries[j])
+		if bi != bj {
+			return bi < bj
+		}
 		if entries[i].Priority != entries[j].Priority {
 			return entries[i].Priority > entries[j].Priority
 		}
 		return entries[i].AddedAt.After(entries[j].AddedAt)
 	})
 	return entries
+}
+
+// seriesBucket groups the list the way the page shows it: 0 for a series that
+// hasn't been downloaded (or is waiting in the queue), 1 for one downloading
+// right now, 2 for one that already ran. A series that failed or was cancelled
+// counts as done: it had its turn and whatever is left of it is a retry.
+func seriesBucket(entry seriesEntry) int {
+	switch {
+	case entry.Job == nil, entry.Job.Status == statusQueued:
+		return 0
+	case entry.Job.Status == statusRunning:
+		return 1
+	default:
+		return 2
+	}
 }
 
 // titleFromURL names a series by its slug until a run reports the real title,

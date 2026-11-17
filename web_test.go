@@ -1027,3 +1027,59 @@ func TestPriorityEndpoint(t *testing.T) {
 		t.Errorf("POST /api/series with a bad priority = %d, want 400", code)
 	}
 }
+
+// TestSeriesListOrder is the order the operator asked for: what hasn't downloaded
+// yet on top, then what is downloading, then what already ran — each group by
+// priority, so the top of the list is what happens next.
+func TestSeriesListOrder(t *testing.T) {
+	store := testStore(t, stubBinary(t, 0))
+
+	add := func(slug string, priority int) wishlistEntry {
+		t.Helper()
+		entry, err := store.addToWishlist("https://www.crunchyroll.com/series/"+slug, "", 0, priority)
+		if err != nil {
+			t.Fatalf("addToWishlist(%s): %v", slug, err)
+		}
+		return entry
+	}
+	queue := func(entry wishlistEntry, status JobStatus) *Job {
+		t.Helper()
+		job, err := store.enqueue(entry.URL, entry.ID, jobOptions{Priority: entry.Priority}, entry.Title)
+		if err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+		store.update(job.ID, func(j *Job) { j.Status = status })
+		return job
+	}
+
+	// One of each group, deliberately added out of order.
+	doneLow := add("A/done-low", 0)
+	queue(doneLow, statusDone)
+	runningLow := add("B/running-low", 0)
+	queue(runningLow, statusRunning)
+	waitingHigh := add("C/waiting-high", 3)
+	queue(waitingHigh, statusQueued)
+	add("D/never", 1) // in the list, no run yet
+	doneHigh := add("E/done-high", 3)
+	queue(doneHigh, statusDone)
+	runningHigh := add("F/running-high", 2)
+	queue(runningHigh, statusRunning)
+	waitingLow := add("G/waiting-low", 0)
+	queue(waitingLow, statusQueued)
+	failed := add("H/failed", 2)
+	queue(failed, statusFailed)
+
+	got := []string{}
+	for _, entry := range store.seriesSnapshot() {
+		got = append(got, entry.Title)
+	}
+	// Title is learned from the slug until a run names the series.
+	want := []string{
+		"Waiting High", "Never", "Waiting Low", // not downloaded yet, by priority
+		"Running High", "Running Low", // downloading, by priority
+		"Done High", "Failed", "Done Low", // already ran, by priority
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("order = %v\nwant    %v", got, want)
+	}
+}

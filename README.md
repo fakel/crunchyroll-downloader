@@ -293,9 +293,13 @@ The page has two things:
   show you want now jumps ahead of the ones already queued; equal priorities keep
   the old first-in-first-out order, which is what the queue did before priorities
   existed. Changing a priority also reorders the run that series already has
-  waiting. The list is drawn in queue order, so the top row is what downloads
-  next. A run that is already downloading keeps going: stopping it to restart it
-  is your call, and `Cancelar` is there for that.
+  waiting. A run that is already downloading keeps going: stopping it to restart
+  it is your call, and `Cancelar` is there for that.
+- **Order of the list**: series that haven't downloaded yet (or are waiting in
+  the queue) come first, then the one downloading right now, then the ones that
+  already ran; each group is sorted by priority, highest first, so the top row is
+  what happens next. A failed or cancelled series counts as "already ran": it had
+  its turn, and whatever is left of it is a retry.
 - **Ajustes**: the `etp_rt` cookie, the output directory, and local vs SFTP —
   everything `--audio-lang`, `--video-quality`, `--download-delay` and
   `CRDL_SFTP_*` do on the command line. Saved in `config.json` (mode 0600) in the
