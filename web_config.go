@@ -101,6 +101,9 @@ func loadWebConfig(dataDir string) (webConfig, error) {
 		return defaultConfig(), fmt.Errorf("%s: %w", configPath(dataDir), err)
 	}
 	cfg.applyDefaults()
+	// A cookie pasted in a wrapped form before sanitising existed is stored
+	// wrapped; cleaning it on load recovers it without a re-paste.
+	cfg.EtpRt = sanitizeEtpRt(cfg.EtpRt)
 	return cfg, nil
 }
 
@@ -251,7 +254,16 @@ func (c webConfig) mergeUpdate(body []byte) (webConfig, error) {
 		case "destination":
 			err = json.Unmarshal(raw, &c.Destination)
 		case "etpRt":
-			err = json.Unmarshal(raw, &c.EtpRt)
+			var pasted string
+			if err = json.Unmarshal(raw, &pasted); err == nil {
+				cleaned := sanitizeEtpRt(pasted)
+				if cleaned == "" && strings.TrimSpace(pasted) != "" {
+					// Refuse the save rather than overwriting a working
+					// cookie with something Crunchyroll will reject.
+					return c, errors.New("that doesn't look like an etp_rt cookie value; paste only the value from the browser's cookie list")
+				}
+				c.EtpRt = cleaned
+			}
 		case "videoQuality":
 			err = json.Unmarshal(raw, &c.VideoQuality)
 		case "audioQuality":

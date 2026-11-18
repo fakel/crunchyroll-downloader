@@ -452,6 +452,41 @@ func TestMergeUpdateKeepsWhatIsNotSent(t *testing.T) {
 	}
 }
 
+// TestSanitizeEtpRt checks that the forms a cookie gets pasted in (with its
+// name, quotes, or JSON-ish wrapping) are reduced to the bare value, and that
+// a plain value passes through untouched.
+func TestSanitizeEtpRt(t *testing.T) {
+	const uuid = "123e4567-e89b-12d3-a456-426614174000"
+	for _, tc := range []struct{ in, want string }{
+		{uuid, uuid},
+		{"  " + uuid + " \n", uuid},
+		{"etp_rt=" + uuid, uuid},
+		{`etp_rt:"` + uuid + `"`, uuid},
+		{"etp_rt=" + uuid + "; other=1", uuid},
+		{`"etp_rt": "` + uuid + `"`, uuid},
+		{"cookie-value", "cookie-value"},
+		{"new-cookie", "new-cookie"},
+	} {
+		if got := sanitizeEtpRt(tc.in); got != tc.want {
+			t.Errorf("sanitizeEtpRt(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestMergeUpdateCleansAPastedCookie checks that saving a wrapped cookie
+// stores only the value, so the next download doesn't 400 on login.
+func TestMergeUpdateCleansAPastedCookie(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.EtpRt = "old-cookie"
+	next, err := cfg.mergeUpdate([]byte(`{"etpRt":"etp_rt:\"123e4567-e89b-12d3-a456-426614174000\""}`))
+	if err != nil {
+		t.Fatalf("mergeUpdate: %v", err)
+	}
+	if next.EtpRt != "123e4567-e89b-12d3-a456-426614174000" {
+		t.Errorf("stored cookie = %q, want the bare value", next.EtpRt)
+	}
+}
+
 // TestInterruptedOnRestart checks that a job left running when the server stopped
 // comes back as interrupted, which is what makes the page offer a retry.
 func TestInterruptedOnRestart(t *testing.T) {
