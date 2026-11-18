@@ -281,12 +281,19 @@ The page has two things:
   per run: the row shows the latest run — the current episode, the per-track
   progress, whether it's uploading, why it's waiting (a rate-limit backoff, a
   retry) and the episodes that failed — and how many times it has run.
-  `Buscar nuevos` queues it again; episodes already on disk or on the server are
-  skipped, so only what's new gets downloaded. Asking for a series that is
-  already queued or downloading returns that run instead of queueing a second
-  one, so pressing the button twice (or `Buscar nuevos en todas`, which covers
-  every series at once) costs nothing. `Cancelar` stops the download and
-  the FFmpeg it started, and `Registro` shows that run's full log.
+  The progress bar is cumulative across runs: retrying a stuck, failed or
+  interrupted series, or searching for new episodes, doesn't reset it to zero.
+  A fresh run starts at 0/0 until it announces its season, so the bar keeps
+  showing the furthest point any previous run reached; episodes the new run
+  re-skips were already counted, and only the ones it passes beyond that move
+  the bar. If new episodes appear, the total grows and the bar dips until
+  they're downloaded. `Buscar nuevos` queues it again; episodes already on disk
+  or on the server are skipped, so only what's new gets downloaded. Asking for
+  a series that is already queued or downloading returns that run instead of
+  queueing a second one, so pressing the button twice (or `Buscar nuevos en
+  todas`, which covers every series at once) costs nothing. `Cancelar` stops
+  the download and the FFmpeg it started, and `Registro` shows that run's
+  full log.
 - **Priority**: every series carries a priority — `normal`, `media`, `alta` or
   `urgente` (0 to 3 in the API) — chosen when it's added and changeable from its
   row. The worker always starts the waiting series with the highest number, so a
@@ -304,7 +311,13 @@ The page has two things:
   everything `--audio-lang`, `--video-quality`, `--download-delay` and
   `CRDL_SFTP_*` do on the command line. Saved in `config.json` (mode 0600) in the
   data directory; the page never shows the cookie or the SFTP password back, it
-  only says whether they're set.
+  only says whether they're set. The cookie field is forgiving about what gets
+  pasted into it: the bare value, `etp_rt=<value>`, `etp_rt:"<value>"`, a whole
+  cookie header, or a JSON-ish line all work — it's cleaned down to the bare
+  value before it's saved (and for the CLI, before it's sent). A paste with no
+  recognizable value is refused instead of overwriting a working cookie, and a
+  cookie that was already stored in a wrapped form is cleaned when the server
+  next starts, so it doesn't need to be pasted again.
 
 State lives in two JSON files in `--data-dir` (`config.json`, `jobs.json`) plus
 `logs/`, so backing up or moving an install is copying that directory. A job that
@@ -337,6 +350,161 @@ journalctl -u crld-web -f                                  # the service
 systemctl status crld-web caddy
 ```
 
+### Updating an existing install (deploying a new build)
+
+`install.sh` is for a first install. For a machine that's already running
+(`crld-web` installed, `/opt/crunchyroll-downloader`, the data directory), a
+new build is swapped in without touching the settings, the queue or the
+downloaded files:
+
+```shell
+# 1. Build locally, from the repo root, and check it first
+go test ./...
+go build -trimpath -o /tmp/crunchyroll-downloader.next .
+
+# 2. Upload it next to the installed copy, under a .next name, so the running
+#    service keeps executing the old binary until the swap
+scp /tmp/crunchyroll-downloader.next root@<host>:/root/crdl-install/crunchyroll-downloader.next
+scp deploy/swap.py root@<host>:/root/crdl-install/swap.py
+
+# 3. On the server: pause the queue, install, restart, re-queue whatever the
+#    restart interrupted, and unpause
+ssh root@<host> 'CRDL_WEB_USER=<user> CRDL_WEB_PASSWORD=<pass> python3 /root/crdl-install/swap.py'
+```
+
+`deploy/swap.py` reads the web basic-auth credentials from `CRDL_WEB_USER` /
+`CRDL_WEB_PASSWORD` (never hardcode them in the repo), pauses the queue
+(`POST /api/pause`) so no job starts mid-swap, installs the `.next` binary
+over `/opt/crunchyroll-downloader/crunchyroll-downloader`, restarts
+`crld-web`, re-queues every job the restart left `interrupted`
+(`POST /api/jobs/{id}/retry` — it resumes from what's already on disk), and
+unpauses. It prints the titles it re-queued.
+
+Verify afterwards that what runs is what you built:
+
+```shell
+md5sum /tmp/crunchyroll-downloader.next        # local
+ssh root@<host> 'md5sum /opt/crunchyroll-downloader/crunchyroll-downloader; systemctl is-active crld-web'
+```
+
+Rules that keep a deploy safe: never overwrite the running binary in place,
+never delete or edit `config.json` / `jobs.json` by hand (that's the queue,
+the wishlist and the secrets), and don't run a second downloader by hand
+while the service is up — the rate limit is per client, so two processes
+race each other into a block.
+
+## Using an AI coding agent
+
+The web interface is the operator's surface; an agent is most useful for
+the code, for diagnosing a failed run, and for deploying. These prompts are
+meant to be copied as-is (fill in the `<…>` parts). They encode the lessons
+from real incidents — the wrapped-cookie `invalid_grant`, the progress bar
+that reset on every re-queue, the queue left hanging after a failure — so
+the agent doesn't have to rediscover them.
+
+Safety rules every prompt assumes (give them to the agent once, or paste
+them in): never print, commit or log the `etp_rt` cookie, the SFTP password
+or the web password; never delete `config.json`, `jobs.json` or `logs/`;
+commit only the files the task touches (`git add <file>`, not `git add -A`);
+run `go test ./...` and `go vet ./...` before committing.
+
+### Diagnose a failed download
+
+```text
+A download in the web interface failed with this error: <paste the error,
+ e.g. "Couldn't log in: crunchyroll rejected the etp_rt cookie (HTTP 400:
+ invalid_grant)">.
+Find out why, in this order, and report what you find before changing anything:
+1. In web_parse.go / token.go, what does this exact error mean and where is
+   it produced?
+2. On the server, check the stored cookie's shape only (length, and whether
+   it contains spaces, ';', '=' or quotes) — never print its value. A value
+   stored as etp_rt:"<uuid>" or with a header wrapper is rejected by
+   Crunchyroll; the app now cleans pastes on save and on load, so say
+   whether the running build has that fix.
+3. If the shape is clean, the cookie is most likely expired or revoked:
+   tell me to paste a fresh one in Ajustes (bare value only) and retry.
+Don't retry the download in a loop: the rate limit is per client, and a
+fresh cookie does not lift a block.
+```
+
+### Add a series, or search for new episodes, without losing progress
+
+```text
+Add <series URL> to the web interface (or press "Buscar nuevos" for it) and
+confirm it queued. If the series already downloaded episodes, the progress
+bar must keep showing them — it is cumulative across runs (seriesSnapshot
+in web_jobs.go), so a fresh 0/0 run must not blank it. Check the row via
+GET /api/state: done/total should be at least what the previous run
+reached, and the new run should only be "running"/"queued", not a duplicate.
+If the series is already queued or downloading, do not queue a second run.
+```
+
+### Update the cookie or another setting
+
+```text
+Update the etp_rt cookie in the web interface's Ajustes with the value I
+paste below. Paste it exactly as given to the API (PUT /api/config,
+{"etpRt": "..."}); the server cleans wrappers such as etp_rt:, quotes,
+whitespace or a trailing ';' before storing. Afterwards confirm via
+GET /api/config that hasEtpRt is true (never ask it to return the value),
+and do not echo the cookie back to me. If the save is rejected, tell me the
+paste had no recognizable value instead of overwriting the old cookie.
+```
+
+### Fix a bug
+
+```text
+Fix this bug: <describe the symptom and how to reproduce it>.
+Start from the symptom, not from a guessed file: find where the behaviour
+is produced, reproduce it with a failing Go test first (web_test.go has
+stubBinary / testStore for driving the web queue and the log parser without
+downloading anything), then make the smallest change that fixes it. Run
+`go test ./...` and `go vet ./...`. Commit only the files you touched, one
+commit with a message like "fix(web): ...", push to master, and tell me the
+commit hash. Do not deploy unless I ask.
+```
+
+### Deploy a new build to the existing server
+
+```text
+Deploy the current master to the existing server (<host>, root SSH).
+Follow the "Updating an existing install" section of the README exactly:
+go build -trimpath to /tmp/crunchyroll-downloader.next, scp it to
+/root/crdl-install/crunchyroll-downloader.next on the server, then run
+deploy/swap.py there with the web credentials from the environment (never
+print them). Afterwards verify: the md5 of
+/opt/crunchyroll-downloader/crunchyroll-downloader matches the local build,
+`systemctl is-active crld-web` is active, and report which series swap.py
+re-queued. Do not touch config.json, jobs.json or the downloaded files.
+```
+
+### Check that the server and queue are healthy
+
+```text
+Check the server at <host> without changing anything: is crld-web active and
+since when (systemctl show crld-web -p ActiveEnterTimestamp)? Via the API
+(GET /api/state, with the basic-auth credentials from the environment),
+what is the queue doing — which series is running, which are queued, which
+are interrupted/failed, and is the progress bar (done/total) consistent
+with the runs each series has had? If something is stuck, say what it is
+and what the retry / "Buscar nuevos" button would do, but don't press it
+or restart anything without asking me first.
+```
+
+### Get oriented in the codebase
+
+```text
+Explain how this app works, from the code: what main.go does with --serve,
+how web_jobs.go (the queue, seriesSnapshot) and web_parse.go (turning the
+child process's output lines into progress) fit together, where the settings
+live (web_config.go, config.json) and how a job ends up running the same
+binary as a child process. Point at the specific files and functions, and
+mention the non-obvious invariants an agent must not break: one job at a
+time, interrupting a run must resume from what's on disk, secrets are never
+sent back to the browser, and progress is cumulative across runs.
+```
+
 ## Building
 
 ### Requirements
@@ -359,6 +527,15 @@ systemctl status crld-web caddy
 - Select the Crunchyroll domain, then copy the `etp_rt` cookie value
 
 ![](.github/screenshots/etp-rt-cookie.png)
+
+Only the **value** is needed — not the `etp_rt=` name and not the surrounding
+quotes. If what got pasted includes them (copying from DevTools often
+produces `etp_rt:"<value>"`), Crunchyroll rejects it with
+`Couldn't log in: crunchyroll rejected the etp_rt cookie (HTTP 400:
+…invalid_grant)`. The app cleans such pastes on save and on the next start,
+so a cookie already stored that way recovers on its own; if the error
+persists after that, the cookie itself has expired or been revoked and a
+fresh one has to be pasted.
 
 ### What is a `.wvd` file and do I really need one?
 

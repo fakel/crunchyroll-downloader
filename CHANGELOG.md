@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The web progress bar is now cumulative across runs of a series: re-queueing a stuck, failed or interrupted series (or searching for new episodes) no longer blanks it, because a fresh run starts at 0/0 and the list now shows the furthest point any previous run reached, without double-counting episodes a new run re-skips
+- A pasted `etp_rt` cookie is cleaned down to its bare value before it's saved or sent, so `etp_rt=<value>`, `etp_rt:"<value>"`, a whole cookie header or a JSON-ish line no longer fail login with `invalid_grant`; a paste with no recognizable value is refused instead of overwriting a working cookie, and a cookie already stored in a wrapped form is cleaned on load
+- The SFTP password field in the settings form now carries the `id` the page looks it up by, so loading and saving the settings no longer breaks on it
+- README: deploying a new build to an existing install (`deploy/swap.py`, which pauses the queue, swaps the binary, restarts and re-queues the interrupted runs) and copy-paste prompts for using the app and its deployment with an AI coding agent
+
 - Series can now be given a priority (0-3: normal, media, alta, urgente) when they are added and changed afterwards from their row. The queue always starts the waiting series with the highest priority; equal priorities keep the old first-in-first-out order, so with no priority set the queue behaves exactly as before. Changing a priority also reorders the run that series already has waiting, and a run already downloading is left alone. The list is grouped: series that haven't downloaded yet (or are queued) first, then the one downloading, then the ones that already ran, each group by priority
 - Dependencies updated (mp4ff 0.63, sftp 1.13.12, x/crypto 0.59, go-mpd) and `go.mod` now requires Go 1.26
 - PSSH extraction now parses the manifest directly instead of relying on `go-mpd`'s `Descriptor`. Upstream changed the struct tag from `pssh` to `cenc:pssh`, which `encoding/xml` reads as a literal element name and so never matches a namespaced `<cenc:pssh>`; upgrading the module silently made every download fail with "PSSH not found". A test now covers both the prefixed and unprefixed element
