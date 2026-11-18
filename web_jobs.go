@@ -459,6 +459,16 @@ func (s *jobStore) seriesSnapshot() []seriesEntry {
 		})
 	}
 
+	// Progress is cumulative over every run of a series, not just the latest
+	// one. A fresh run (a retry after a stuck/failed/interrupted run, or
+	// "search new") starts at 0/0 until the downloader announces its season
+	// and starts skipping episodes it already has, so showing only that run
+	// would blank the bar and hide what was already downloaded. Taking the
+	// furthest point any run reached keeps the bar where the series actually
+	// is: episodes a new run re-skips were already counted by an earlier run,
+	// and only the ones it manages to pass beyond that move the bar.
+	progress := map[string][2]int{} // series key -> [done, total] furthest reached
+
 	// jobs arrive newest first, so the first one seen for a series is its latest.
 	for i := range jobs {
 		job := jobs[i]
@@ -478,6 +488,28 @@ func (s *jobStore) seriesSnapshot() []seriesEntry {
 		}
 		if entries[index].Job == nil {
 			entries[index].Job = &job
+		}
+		furthest := progress[key]
+		if job.Done > furthest[0] {
+			furthest[0] = job.Done
+		}
+		if job.Total > furthest[1] {
+			furthest[1] = job.Total
+		}
+		progress[key] = furthest
+	}
+
+	for i := range entries {
+		if entries[i].Job == nil {
+			continue
+		}
+		// The jobs in the snapshot are copies, so overwriting the counts here
+		// only changes what the page draws, not the stored per-run history.
+		furthest := progress[seriesKey(entries[i].URL)]
+		entries[i].Job.Done = furthest[0]
+		entries[i].Job.Total = furthest[1]
+		if furthest[1] > 0 && entries[i].Job.Done > furthest[1] {
+			entries[i].Job.Done = furthest[1]
 		}
 	}
 

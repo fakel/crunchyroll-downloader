@@ -713,6 +713,44 @@ func TestSeriesListOneEntryPerSeries(t *testing.T) {
 	}
 }
 
+// TestProgressSurvivesARestart checks that re-queueing a series (retrying a
+// stuck run, or searching for new episodes) does not blank its progress bar:
+// a fresh run starts at 0/0, so the list has to keep showing how far earlier
+// runs got until the new one passes them.
+func TestProgressSurvivesARestart(t *testing.T) {
+	store := testStore(t, stubBinary(t, 0,
+		"Downloading season 1 of Cowboy Bebop (24 episodes)",
+		"",
+		"Episode 1 is already downloaded as \"x\", skipping...",
+		"Download finished! Output file: /tmp/x.mkv",
+	))
+	url := "https://www.crunchyroll.com/series/GYVNXMVP6/cowboy-bebop"
+
+	first, err := store.enqueue(url, "", jobOptions{}, "")
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	runQueuedJob(t, store) // 2 of 24 done, then the run ends
+	store.update(first.ID, func(j *Job) { j.Status = statusInterrupted })
+
+	// Searching for new episodes queues a fresh run that has not announced
+	// anything yet.
+	if _, err := store.enqueue(url, "", jobOptions{}, ""); err != nil {
+		t.Fatalf("enqueue again: %v", err)
+	}
+	series := store.seriesSnapshot()
+	if len(series) != 1 || series[0].Job == nil {
+		t.Fatalf("series = %+v", series)
+	}
+	if series[0].Job.Done != 2 || series[0].Job.Total != 24 {
+		t.Errorf("progress after re-queue = %d/%d, want 2/24", series[0].Job.Done, series[0].Job.Total)
+	}
+	// The stored runs keep their own numbers; only the list adds them up.
+	if got, _ := store.jobByID(first.ID); got.Done != 2 || got.Total != 24 {
+		t.Errorf("stored first run = %d/%d, want its own 2/24", got.Done, got.Total)
+	}
+}
+
 // TestQueueIsIdempotent checks that asking for a series twice doesn't queue two
 // runs of it: "search new" covers every series at once and the button is easy to
 // press again.
