@@ -300,10 +300,13 @@ The page has four things:
   device uploaded twice stays one entry). The first device becomes the
   active one, copied to `cdms/device.wvd`, which is what downloads use —
   the install directory is read-only for the service, so devices can't live
-  next to the binary. The section shows how many devices are available,
-  which one is current, and a **Rotar dispositivo** button that makes the
-  next one active for the following download. Uploads and rotation are
-  refused while a download is running, so a device never changes mid-license.
+  next to the binary. The section shows how many devices are available and
+  which one is current; the full list stays collapsed behind a **Ver
+  dispositivos** toggle, and each entry has its own **Borrar** button (the
+  active device can't be deleted — rotate to another one first). A
+  **Rotar dispositivo** button makes the next one active for the following
+  download. Uploads, rotation and deletion are refused while a download
+  is running, so a device never changes mid-license.
   A `.wvd` left next to the binary by an older install is adopted into the
   pool on the first start of this build. On the command line nothing
   changes: `device.wvd` in the working directory still works, and

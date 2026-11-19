@@ -217,22 +217,43 @@ async function deleteSeries(entry) {
 
 // ---- widevine devices ----------------------------------------------------
 
+let cdmExpanded = false;
+
 function renderCdms(data) {
   const count = document.getElementById("cdm-count");
   const list = document.getElementById("cdm-list");
   const rotate = document.getElementById("cdm-rotate");
+  const toggle = document.getElementById("cdm-toggle");
   if (!data) return;
   count.textContent = data.count === 0
     ? "ningún dispositivo disponible"
     : `${data.count} dispositivo(s) disponible(s) · actual: ${data.current || "ninguno"}`;
   rotate.disabled = !data.count || data.count < 2;
+  toggle.disabled = !data.count;
+  toggle.textContent = cdmExpanded ? "Ocultar dispositivos" : `Ver dispositivos (${data.count})`;
+  list.hidden = !cdmExpanded;
   list.replaceChildren(...(data.devices || []).map((d) =>
     el("li", {},
       el("span", { text: d.name }),
       el("span", { class: "hint", text: `${(d.size / 1024).toFixed(1)} KB` }),
-      d.current ? el("span", { class: "badge", text: "actual" }) : null
+      d.current ? el("span", { class: "badge", text: "actual" }) : null,
+      el("button", {
+        class: "danger tiny", type: "button", text: "Borrar",
+        disabled: d.current || undefined,
+        title: d.current ? "Es el activo; rota a otro antes de borrarlo" : `Borrar ${d.name}`,
+        onclick: () => deleteCdm(d),
+      })
     )
   ));
+}
+
+async function deleteCdm(device) {
+  if (!confirm(`¿Borrar ${device.name}? No se puede recuperar.`)) return;
+  const res = await guarded(() => api(`/api/cdms/${encodeURIComponent(device.name)}`, { method: "DELETE" }));
+  if (res) {
+    renderCdms(res);
+    sayCdm(`Borrado: ${device.name}. Quedan ${res.count}.`);
+  }
 }
 
 async function refreshCdms() {
@@ -265,6 +286,11 @@ document.getElementById("cdm-form").addEventListener("submit", async (event) => 
   } else {
     sayCdm("");
   }
+});
+
+document.getElementById("cdm-toggle").addEventListener("click", () => {
+  cdmExpanded = !cdmExpanded;
+  refreshCdms();
 });
 
 document.getElementById("cdm-rotate").addEventListener("click", async () => {

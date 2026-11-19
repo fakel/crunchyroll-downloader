@@ -14,6 +14,15 @@ import (
 	"testing"
 )
 
+func mustRequest(t *testing.T, method, url string) *http.Request {
+	t.Helper()
+	req, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	return req
+}
+
 func makeZip(t *testing.T, files map[string]string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -181,6 +190,49 @@ func TestCDMHandlers(t *testing.T) {
 	res.Body.Close()
 	if rotated["rotated"] != true || rotated["current"] == before {
 		t.Errorf("rotate = %v, want a new current (was %q)", rotated, before)
+	}
+
+	// Deleting the active device is refused: the next download would have
+	// nothing to license with, so it has to be rotated away from first.
+	res, err = server.Client().Do(mustRequest(t, "DELETE", server.URL+"/api/cdms/"+rotated["current"].(string)))
+	if err != nil {
+		t.Fatalf("delete current: %v", err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusConflict {
+		t.Errorf("delete active device: status=%d, want 409", res.StatusCode)
+	}
+
+	// Deleting an unknown name is a 404.
+	res, err = server.Client().Do(mustRequest(t, "DELETE", server.URL+"/api/cdms/nope.wvd"))
+	if err != nil {
+		t.Fatalf("delete unknown: %v", err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Errorf("delete unknown: status=%d, want 404", res.StatusCode)
+	}
+
+	// Deleting a non-active device removes just that one.
+	var other string
+	for _, d := range inv.Devices {
+		if d.Name != rotated["current"] {
+			other = d.Name
+			break
+		}
+	}
+	res, err = server.Client().Do(mustRequest(t, "DELETE", server.URL+"/api/cdms/"+other))
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	var after cdmInventory
+	json.NewDecoder(res.Body).Decode(&after)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || after.Count != 2 {
+		t.Errorf("delete %q: status=%d count=%d, want 200/2", other, res.StatusCode, after.Count)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "cdms", "pool", other)); !os.IsNotExist(err) {
+		t.Errorf("deleted device still on disk: %v", err)
 	}
 
 	// A non-device file is refused with a 400 the page can show.

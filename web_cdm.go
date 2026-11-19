@@ -35,7 +35,7 @@ const (
 	// mistaken ZIP from filling the disk.
 	maxCDMUpload   = 64 << 20 // whole request
 	maxCDMZipBytes = 32 << 20 // uncompressed total of one ZIP
-	maxCDMFiles    = 100
+	maxCDMFiles    = 500
 )
 
 // cdmDevice is one pooled device as the page sees it.
@@ -277,6 +277,43 @@ func (s *cdmStore) rotate() (current string, rotated bool, inv cdmInventory, err
 	return next, true, s.inventoryLocked(), nil
 }
 
+// errCDMNotFound is returned when a pooled name isn't one.
+var errCDMNotFound = errors.New("ese dispositivo no está en el pool")
+
+// errCDMActive is returned when trying to delete the active device: it has
+// to be rotated away from first, so a download never loses its device.
+var errCDMActive = errors.New("es el dispositivo activo; rota a otro antes de borrarlo")
+
+// remove deletes one pooled device by its exact pooled name. Must be called
+// with s.mu held by remove.
+func (s *cdmStore) remove(name string) (cdmInventory, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureActiveLocked()
+	devices, err := s.poolLocked()
+	if err != nil {
+		return s.inventoryLocked(), err
+	}
+	found := false
+	for _, d := range devices {
+		if d.Name == name {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return s.inventoryLocked(), errCDMNotFound
+	}
+	current := s.findByHashLocked(hashOf(s.activePath()))
+	if name == current {
+		return s.inventoryLocked(), errCDMActive
+	}
+	if err := os.Remove(filepath.Join(s.pool, name)); err != nil {
+		return s.inventoryLocked(), err
+	}
+	return s.inventoryLocked(), nil
+}
+
 // inventoryLocked is inventory without re-taking the lock. Must be called
 // with s.mu held.
 func (s *cdmStore) inventoryLocked() cdmInventory {
@@ -404,6 +441,34 @@ func (w *webServer) handleUploadCDM(rw http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(rw, http.StatusOK, map[string]any{
 		"added": added, "duplicated": duplicated,
+		"count": inv.Count, "current": inv.Current, "devices": inv.Devices,
+	})
+}
+
+// handleDeleteCDM deletes one pooled device by name. The active device is
+// kept: deleting it would leave the next download with nothing to license
+// with, so it has to be rotated away from first. Refused while a download
+// is running, like upload and rotate.
+func (w *webServer) handleDeleteCDM(rw http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if w.store.hasRunningJob() {
+		writeError(rw, http.StatusConflict, "hay una descarga en marcha; borra el dispositivo cuando termine")
+		return
+	}
+	inv, err := w.cdmStoreFor().remove(r.PathValue("name"))
+	if errors.Is(err, errCDMNotFound) {
+		writeError(rw, http.StatusNotFound, "%v", err)
+		return
+	}
+	if errors.Is(err, errCDMActive) {
+		writeError(rw, http.StatusConflict, "%v", err)
+		return
+	}
+	if err != nil {
+		writeError(rw, http.StatusInternalServerError, "no se pudo borrar el dispositivo: %v", err)
+		return
+	}
+	writeJSON(rw, http.StatusOK, map[string]any{
 		"count": inv.Count, "current": inv.Current, "devices": inv.Devices,
 	})
 }

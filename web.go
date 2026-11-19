@@ -135,6 +135,7 @@ func (w *webServer) routes() http.Handler {
 	mux.HandleFunc("GET /api/cdms", w.handleGetCDMs)
 	mux.HandleFunc("POST /api/cdms/upload", w.handleUploadCDM)
 	mux.HandleFunc("POST /api/cdms/rotate", w.handleRotateCDM)
+	mux.HandleFunc("DELETE /api/cdms/{name}", w.handleDeleteCDM)
 
 	static, err := fs.Sub(staticFiles, "web/static")
 	if err != nil {
