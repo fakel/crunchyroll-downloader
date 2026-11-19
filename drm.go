@@ -295,7 +295,7 @@ func decryptMP4(initData []byte, media io.Reader, licenseKeys []*widevine.Key, o
 		// Match this track's KID with a content key returned by the license.
 		for _, key := range licenseKeys {
 			if key.Type == widevinepb.License_KeyContainer_CONTENT && bytes.Equal(key.ID, kid) {
-				return widevine.DecryptMP4(media, key.Key, output)
+				return decryptMP4Streaming(media, decryptInfo, init.Init.Moov, key.Key, output)
 			}
 		}
 		// Keep looking: a later track may still match a key in the license.
@@ -306,4 +306,96 @@ func decryptMP4(initData []byte, media io.Reader, licenseKeys []*widevine.Key, o
 		return fmt.Errorf("no license key found for MP4 KID(s) %s", strings.Join(unmatched, ", "))
 	}
 	return errors.New("MP4 has no encrypted tracks")
+}
+
+// decryptMP4Streaming decrypts a fragmented MP4 one fragment at a time.
+//
+// gowidevine's DecryptMP4 (mp4ff DecodeFile) parses the WHOLE file into a
+// File struct, so a 1080p episode needs as much RAM as the encrypted file
+// itself (several GB) and the Go heap is not returned to the OS afterwards —
+// on a small container that exhausts memory and freezes the whole system.
+// Here each moof/mdat pair is decoded, decrypted and written out before the
+// next one is read, so peak memory is one fragment (a few MB) regardless of
+// the episode length. The loop mirrors mp4ff's DecodeFile: senc parsing per
+// traf, boxes before a moof attached to its fragment, trailing boxes flushed
+// at EOF.
+func decryptMP4Streaming(media io.Reader, decryptInfo mp4.DecryptInfo, moov *mp4.MoovBox, key []byte, output io.Writer) error {
+	var pos uint64
+	var preBoxes []mp4.Box // boxes since the last mdat that belong to the next fragment
+	var moof *mp4.MoofBox
+	flush := func(frag *mp4.Fragment) error {
+		seg := &mp4.MediaSegment{}
+		seg.AddFragment(frag)
+		if err := mp4.DecryptSegment(seg, decryptInfo, key); err != nil {
+			return err
+		}
+		return frag.Encode(output)
+	}
+	for {
+		box, err := mp4.DecodeBox(pos, media)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to decode file: %w", err)
+		}
+		switch box.Type() {
+		case "moov":
+			moov = box.(*mp4.MoovBox)
+			// DecryptInit mutates the moov in place (RemoveEncryption drops the
+			// sinf boxes), so the written init must be the box AFTER that
+			// call — encoding the raw encrypted moov would leave sinf in the
+			// output (the whole-file path's Init.Encode does not have it).
+			// The error is ignored: a non-encrypted moov has nothing to strip,
+			// and a real problem surfaces as a KID mismatch in decryptMP4.
+			_, _ = mp4.DecryptInit(&mp4.InitSegment{Moov: moov})
+			for _, b := range preBoxes {
+				if err := b.Encode(output); err != nil {
+					return fmt.Errorf("failed to write init: %w", err)
+				}
+			}
+			preBoxes = nil
+			if err := box.Encode(output); err != nil {
+				return fmt.Errorf("failed to write init: %w", err)
+			}
+		case "moof":
+			moof = box.(*mp4.MoofBox)
+			for _, traf := range moof.Trafs {
+				if ok, parsed := traf.ContainsSencBox(); ok && !parsed {
+					var defaultIVSize byte
+					if moov != nil && moov.IsEncrypted(traf.Tfhd.TrackID) {
+						if sinf := moov.GetSinf(traf.Tfhd.TrackID); sinf != nil && sinf.Schi != nil && sinf.Schi.Tenc != nil {
+							defaultIVSize = sinf.Schi.Tenc.DefaultPerSampleIVSize
+						}
+					}
+					if err := traf.ParseReadSenc(defaultIVSize, moof.StartPos); err != nil {
+						return err
+					}
+				}
+			}
+		case "mdat":
+			if moof == nil {
+				return errors.New("mdat without preceding moof")
+			}
+			frag := &mp4.Fragment{Moof: moof, Mdat: box.(*mp4.MdatBox)}
+			frag.Children = append(append([]mp4.Box{}, preBoxes...), moof, box)
+			if err := flush(frag); err != nil {
+				return err
+			}
+			preBoxes = nil
+			moof = nil
+		default:
+			preBoxes = append(preBoxes, box)
+		}
+		pos += box.Size()
+	}
+	if moof != nil {
+		return errors.New("truncated file: moof without mdat")
+	}
+	for _, box := range preBoxes {
+		if err := box.Encode(output); err != nil {
+			return err
+		}
+	}
+	return nil
 }

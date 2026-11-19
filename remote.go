@@ -148,7 +148,22 @@ func describeDialError(err error, r *remoteUploader) error {
 	return err
 }
 
-func (r *remoteUploader) connect() (*sftp.Client, error) {
+// sftpClient closes the SSH connection as well as the SFTP session.
+// sftp.Client.Close only ends the session (conn.go), so without this every
+// connect() leaked one TCP connection to the SFTP server — a long season
+// left dozens of idle sockets behind.
+type sftpClient struct {
+	*sftp.Client
+	conn *ssh.Client
+}
+
+func (c *sftpClient) Close() error {
+	err := c.Client.Close()
+	_ = c.conn.Close()
+	return err
+}
+
+func (r *remoteUploader) connect() (*sftpClient, error) {
 	auth := []ssh.AuthMethod{}
 	if r.keyFile != "" {
 		key, err := os.ReadFile(r.keyFile)
@@ -189,7 +204,7 @@ func (r *remoteUploader) connect() (*sftp.Client, error) {
 		_ = conn.Close()
 		return nil, err
 	}
-	return client, nil
+	return &sftpClient{Client: client, conn: conn}, nil
 }
 
 // findEpisode looks inside the remote season directory for a file whose name
