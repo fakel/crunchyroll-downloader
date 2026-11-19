@@ -9,8 +9,10 @@ const state = { paused: false, series: [], log: null };
 // api calls the JSON API and turns an error response into an Error whose message
 // the page can show as-is.
 async function api(path, options = {}) {
+  const isForm = options.body instanceof FormData;
   const res = await fetch(path, {
-    headers: options.body ? { "Content-Type": "application/json" } : undefined,
+    // A FormData body must keep the browser's own multipart content type.
+    headers: options.body && !isForm ? { "Content-Type": "application/json" } : undefined,
     ...options,
   });
   if (res.status === 204) return null;
@@ -213,6 +215,66 @@ async function deleteSeries(entry) {
 }
 
 
+// ---- widevine devices ----------------------------------------------------
+
+function renderCdms(data) {
+  const count = document.getElementById("cdm-count");
+  const list = document.getElementById("cdm-list");
+  const rotate = document.getElementById("cdm-rotate");
+  if (!data) return;
+  count.textContent = data.count === 0
+    ? "ningún dispositivo disponible"
+    : `${data.count} dispositivo(s) disponible(s) · actual: ${data.current || "ninguno"}`;
+  rotate.disabled = !data.count || data.count < 2;
+  list.replaceChildren(...(data.devices || []).map((d) =>
+    el("li", {},
+      el("span", { text: d.name }),
+      el("span", { class: "hint", text: `${(d.size / 1024).toFixed(1)} KB` }),
+      d.current ? el("span", { class: "badge", text: "actual" }) : null
+    )
+  ));
+}
+
+async function refreshCdms() {
+  try {
+    renderCdms(await api("/api/cdms"));
+  } catch { /* the rest of the page still works without it */ }
+}
+
+function sayCdm(message) {
+  const status = document.getElementById("cdm-status");
+  status.textContent = message;
+  setTimeout(() => { if (status.textContent === message) status.textContent = ""; }, 8000);
+}
+
+document.getElementById("cdm-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const file = document.getElementById("cdm-file").files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append("file", file);
+  sayCdm("Subiendo…");
+  const res = await guarded(() => api("/api/cdms/upload", { method: "POST", body: form }));
+  if (res) {
+    event.target.reset();
+    renderCdms(res);
+    const parts = [];
+    if (res.added) parts.push(`${res.added} nuevo(s)`);
+    if (res.duplicated) parts.push(`${res.duplicated} ya estaba(n)`);
+    sayCdm(parts.length ? `Guardado: ${parts.join(", ")}. Total: ${res.count}.` : "Sin cambios.");
+  } else {
+    sayCdm("");
+  }
+});
+
+document.getElementById("cdm-rotate").addEventListener("click", async () => {
+  const res = await guarded(() => api("/api/cdms/rotate", { method: "POST" }));
+  if (res) {
+    renderCdms(res);
+    sayCdm(res.rotated ? `Ahora activo: ${res.current}` : "Solo hay un dispositivo; no hay a dónde rotar.");
+  }
+});
+
 // ---- shell ---------------------------------------------------------------
 
 function renderQueueState() {
@@ -245,6 +307,7 @@ async function guarded(fn) {
 }
 
 async function refresh() {
+  refreshCdms();
   try {
     const data = await api("/api/jobs");
     state.series = data.series || [];

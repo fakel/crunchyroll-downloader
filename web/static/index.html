@@ -54,6 +54,21 @@
   </section>
 
   <section class="card">
+    <div class="card-head">
+      <h2>Dispositivos Widevine (WVD)</h2>
+      <span id="cdm-count" class="hint">…</span>
+    </div>
+    <form id="cdm-form" class="row-form">
+      <input id="cdm-file" type="file" accept=".wvd,.zip" required title="Un .wvd o un ZIP con .wvd dentro">
+      <button type="submit">Subir WVD / ZIP</button>
+      <button id="cdm-rotate" class="secondary" type="button">Rotar dispositivo</button>
+      <span id="cdm-status" class="hint"></span>
+    </form>
+    <ul id="cdm-list" class="cdm-list"></ul>
+    <p class="hint">El ZIP se descompone en el servidor: cada `.wvd` entra en el pool (sin duplicados) y el primero queda activo. Rotar pone el siguiente como activo para la próxima descarga.</p>
+  </section>
+
+  <section class="card">
     <h2>Ajustes</h2>
     <form id="config-form">
       <div class="grid">

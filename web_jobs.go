@@ -639,6 +639,14 @@ func (s *jobStore) setPaused(paused bool) error {
 	return s.persistLocked()
 }
 
+// hasRunningJob reports whether a download is currently in flight, so things
+// that would change under it (a new Widevine device, say) can wait.
+func (s *jobStore) hasRunningJob() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runningT != nil
+}
+
 // isPaused reports whether the worker is holding queued jobs back.
 func (s *jobStore) isPaused() bool {
 	s.mu.Lock()

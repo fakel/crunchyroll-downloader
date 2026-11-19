@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +29,8 @@ var staticFiles embed.FS
 type webServer struct {
 	dataDir string
 	store   *jobStore
+	cdms    *cdmStore
+	cdmOnce sync.Once
 
 	mu  sync.Mutex // serialises settings writes
 	cfg webConfig
@@ -60,7 +63,15 @@ func serveWeb(listen, dataDir string) error {
 		return err
 	}
 
-	web := &webServer{dataDir: dataDir, store: store, cfg: cfg}
+	cdms, err := newCDMStore(dataDir)
+	if err != nil {
+		return err
+	}
+	// Older installs put device.wvd next to the binary; adopt it into the
+	// pool so the first start of this build doesn't lose the device.
+	cdms.importFrom(filepath.Join(filepath.Dir(cfg.BinaryPath), cdmActive))
+
+	web := &webServer{dataDir: dataDir, store: store, cfg: cfg, cdms: cdms}
 	stop := make(chan struct{})
 	defer close(stop)
 	go store.run(stop)
@@ -120,6 +131,10 @@ func (w *webServer) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/wishlist/{id}", w.handleDeleteWishlist)
 
 	mux.HandleFunc("POST /api/pause", w.handlePause)
+
+	mux.HandleFunc("GET /api/cdms", w.handleGetCDMs)
+	mux.HandleFunc("POST /api/cdms/upload", w.handleUploadCDM)
+	mux.HandleFunc("POST /api/cdms/rotate", w.handleRotateCDM)
 
 	static, err := fs.Sub(staticFiles, "web/static")
 	if err != nil {

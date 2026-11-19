@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/Eyevinn/mp4ff/mp4"
@@ -153,19 +154,54 @@ func sendChallenge(contentId, videoToken string, challenge []byte) ([]byte, erro
 	return decoded, nil
 }
 
+// wvdInDir returns the device in dir, preferring device.wvd (the active
+// device the web interface manages) over any other .wvd there.
+func wvdInDir(dir string) (*widevine.Device, bool, error) {
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, false, nil
+	}
+	var first string
+	for _, file := range files {
+		if !strings.HasSuffix(file.Name(), ".wvd") {
+			continue
+		}
+		if file.Name() == "device.wvd" {
+			first = file.Name()
+			break
+		}
+		if first == "" {
+			first = file.Name()
+		}
+	}
+	if first == "" {
+		return nil, false, nil
+	}
+	wvd, err := os.Open(filepath.Join(dir, first))
+	if err != nil {
+		return nil, true, err
+	}
+	device, err := widevine.NewDevice(widevine.FromWVD(io.NopCloser(wvd)))
+	return device, true, err
+}
+
 func getWidevineDevice() (*widevine.Device, error) {
+	// The web interface points CRDL_CDM_DIR at its device pool; a CLI run
+	// with no variable keeps looking in the working directory, as before.
+	for _, dir := range []string{os.Getenv("CRDL_CDM_DIR"), "."} {
+		if dir == "" {
+			continue
+		}
+		if device, found, err := wvdInDir(dir); found || err != nil {
+			return device, err
+		}
+	}
+
 	var clientID []byte
 	var privateKey []byte
 	files, _ := os.ReadDir(".")
 	for _, file := range files {
-		if strings.HasSuffix(file.Name(), ".wvd") {
-			wvd, err := os.Open(file.Name())
-			if err != nil {
-				return nil, err
-			}
-
-			return widevine.NewDevice(widevine.FromWVD(io.NopCloser(wvd)))
-		} else if file.Name() == "client_id.bin" {
+		if file.Name() == "client_id.bin" {
 			f, err := os.Open("client_id.bin")
 			if err != nil {
 				return nil, err

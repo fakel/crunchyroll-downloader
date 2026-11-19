@@ -211,6 +211,11 @@ dialog footer { padding: .1rem 1rem .7rem; }
   td.url, th:nth-child(3), td:nth-child(3) { display: none; }
 }
 
+.cdm-list { list-style: none; margin: .6rem 0 0; padding: 0; display: grid; gap: .3rem; }
+.cdm-list li { display: flex; align-items: center; gap: .6rem; font-size: .85rem; font-variant-numeric: tabular-nums; }
+.cdm-list .badge { font-size: .72rem; padding: .1rem .45rem; border-radius: 999px; border: 1px solid var(--ok); color: var(--ok); }
+#cdm-form input[type="file"] { flex: 2 1 260px; }
+
 /* The priority picker sits with the status pill, small enough not to compete with
    the series title. */
 select.priority {

@@ -274,7 +274,7 @@ through them, and see what it's doing.
 ./crunchyroll-downloader --serve --listen 127.0.0.1:8080 --data-dir /var/lib/crunchyroll-downloader/state
 ```
 
-The page has two things:
+The page has four things:
 
 - **Series**: paste a Crunchyroll `/series/…` link (all seasons, or one) and
   it's queued straight away and remembered. There is one row per series, not one
@@ -294,6 +294,20 @@ The page has two things:
   todas`, which covers every series at once) costs nothing. `Cancelar` stops
   the download and the FFmpeg it started, and `Registro` shows that run's
   full log.
+- **Dispositivos Widevine (WVD)**: upload a single `.wvd` or a ZIP of them
+  and the server organizes them into a pool under `<data-dir>/cdms/pool/`
+  (each stored as `<name>-<hash>.wvd`, deduplicated by content, so the same
+  device uploaded twice stays one entry). The first device becomes the
+  active one, copied to `cdms/device.wvd`, which is what downloads use —
+  the install directory is read-only for the service, so devices can't live
+  next to the binary. The section shows how many devices are available,
+  which one is current, and a **Rotar dispositivo** button that makes the
+  next one active for the following download. Uploads and rotation are
+  refused while a download is running, so a device never changes mid-license.
+  A `.wvd` left next to the binary by an older install is adopted into the
+  pool on the first start of this build. On the command line nothing
+  changes: `device.wvd` in the working directory still works, and
+  `CRDL_CDM_DIR` points the downloader at another directory instead.
 - **Priority**: every series carries a priority — `normal`, `media`, `alta` or
   `urgente` (0 to 3 in the API) — chosen when it's added and changeable from its
   row. The worker always starts the waiting series with the highest number, so a
@@ -320,7 +334,8 @@ The page has two things:
   next starts, so it doesn't need to be pasted again.
 
 State lives in two JSON files in `--data-dir` (`config.json`, `jobs.json`) plus
-`logs/`, so backing up or moving an install is copying that directory. A job that
+`logs/` and `cdms/` (the device pool and the active `device.wvd`), so backing
+up or moving an install is copying that directory. A job that
 was running when the server stopped comes back as `interrupted` with a retry
 button.
 
@@ -450,6 +465,19 @@ whitespace or a trailing ';' before storing. Afterwards confirm via
 GET /api/config that hasEtpRt is true (never ask it to return the value),
 and do not echo the cookie back to me. If the save is rejected, tell me the
 paste had no recognizable value instead of overwriting the old cookie.
+```
+
+### Upload or rotate Widevine devices
+
+```text
+Upload this .wvd (or ZIP of .wvd files) through the web interface's
+"Dispositivos Widevine (WVD)" section (POST /api/cdms/upload, multipart
+field "file"), then confirm via GET /api/cdms that the count went up and
+which device is current. If a device stopped working, press "Rotar
+dispositivo" (POST /api/cdms/rotate) so the next download uses the next
+pooled device, and confirm the current name changed. Upload and rotate are
+refused with 409 while a download is running — if that happens, wait for
+the current run to finish instead of cancelling it.
 ```
 
 ### Fix a bug

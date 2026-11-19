@@ -28,6 +28,13 @@ type webConfig struct {
 	// each episode and delete it locally).
 	Destination string `json:"destination"`
 
+	// CDMDir is where the Widevine devices live (<data>/cdms); it is derived
+	// from the data directory at load time and is not part of the saved
+	// settings, so it carries no json tag. The download child reads its
+	// active device.wvd from here (CRDL_CDM_DIR) because the install
+	// directory is read-only for the service.
+	CDMDir string `json:"-"`
+
 	EtpRt          string `json:"etpRt"`
 	VideoQuality   string `json:"videoQuality"`
 	AudioQuality   string `json:"audioQuality"`
@@ -89,6 +96,7 @@ func configPath(dataDir string) string {
 // anything missing (a fresh install has no file at all, which is not an error).
 func loadWebConfig(dataDir string) (webConfig, error) {
 	cfg := defaultConfig()
+	cfg.CDMDir = filepath.Join(dataDir, cdmDirName)
 
 	body, err := os.ReadFile(configPath(dataDir))
 	if errors.Is(err, os.ErrNotExist) {
@@ -359,6 +367,9 @@ func (c webConfig) childEnv(extra ...string) []string {
 
 	// A job's output is a log file, never a terminal.
 	env = append(env, "CRDL_PROGRESS=plain")
+	if c.CDMDir != "" {
+		env = append(env, "CRDL_CDM_DIR="+c.CDMDir)
+	}
 	if c.EtpRt != "" {
 		env = append(env, "CRDL_ETP_RT="+c.EtpRt)
 	}
