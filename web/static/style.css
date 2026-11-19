@@ -212,6 +212,8 @@ dialog footer { padding: .1rem 1rem .7rem; }
 }
 
 .cdm-list { list-style: none; margin: .6rem 0 0; padding: 0; display: grid; gap: .3rem; }
+/* display:grid above would override the UA [hidden] rule, so the list could never be collapsed */
+.cdm-list[hidden] { display: none; }
 .cdm-list li { display: flex; align-items: center; gap: .6rem; font-size: .85rem; font-variant-numeric: tabular-nums; }
 .cdm-list .badge { font-size: .72rem; padding: .1rem .45rem; border-radius: 999px; border: 1px solid var(--ok); color: var(--ok); }
 #cdm-form input[type="file"] { flex: 2 1 260px; }
